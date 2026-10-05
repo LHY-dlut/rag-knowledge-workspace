@@ -125,19 +125,38 @@ def load_review(path: Path) -> dict:
         rec = cases[t]
         if not rec.get("confirmed_answer") or not rec.get("confirmed_evidence_spans"):
             raise SystemExit(f"已确认案例缺少答案或证据区间: {t}")
+    # flagged：审阅者发现官方标签问题并给出修正答案，语义上等同已确认，
+    # 由 --include-flagged 决定是否纳入（纳入时逐条记录存疑说明）。
+    includable = sorted(done + flagged)
+    for t in flagged:
+        rec = cases[t]
+        if not rec.get("confirmed_answer") or not rec.get("confirmed_evidence_spans"):
+            raise SystemExit(f"存疑案例缺少修正答案或证据区间: {t}")
     return {
         "review": review,
         "cases": cases,
         "test_ids": test_ids,
         "done": done,
+        "includable": includable,
         "noev": noev,
         "flagged": flagged,
         "missing": missing,
+        "provenance": {
+            "reviewer": review.get("reviewer"),
+            "exported_at": review.get("exported_at"),
+            "ai_assisted": "AI" in (review.get("reviewer") or "") or "ChatGPT" in (review.get("reviewer") or ""),
+        },
     }
 
 
 def fetch_allowlist() -> list[dict]:
     return json.loads(ALLOWLIST.read_text(encoding="utf-8"))["documents"]
+
+
+def _direct_opener():
+    """百炼为国内接口，显式禁用系统代理：宿主若配置了本地代理（Clash 等），
+    urllib 默认走代理，代理不可用时会连接被拒（WinError 10061）。"""
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 def decompose_facts(api_key: str, base_url: str, question: str, answer: str) -> list[str]:
@@ -149,7 +168,7 @@ def decompose_facts(api_key: str, base_url: str, question: str, answer: str) -> 
     )
     for attempt in range(2):
         try:
-            with urllib.request.urlopen(
+            with _direct_opener().open(
                 urllib.request.Request(
                     f"{base_url.rstrip('/')}/chat/completions",
                     data=json.dumps(
@@ -225,56 +244,64 @@ def run_sql_in_container(container: str, sql: str) -> str:
 
 
 def bind_spans(api: Api, container: str, owner_id: str, kb_id: str, doc_id: str) -> list[dict]:
-    """从 PG 取真实子块；把 (doc_id) 下所有子块内容与位置取回，供上层做区间绑定。"""
-    rows = run_sql_in_container(
-        container,
-        "SELECT id, parent_id, content, metadata::text FROM chunk_vector"
-        f" WHERE owner_id='{owner_id}' AND kb_id='{kb_id}' AND doc_id='{doc_id}'"
-        " ORDER BY parent_id, COALESCE((metadata->>'start')::int, 0);",
+    """取该文档在 PG 中的真实子块（含子块在文档内的字符偏移）。
+
+    使用 json_agg 一次性返回：子块正文可能含换行，按行解析 psql 文本输出会把
+    行拆断导致子块丢失甚至整份文档解析为空；JSON 会转义控制字符，解析可靠。
+    """
+    sql = (
+        "SELECT COALESCE(json_agg(row_to_json(t)), '[]')::text FROM ("
+        "  SELECT id, parent_id, content,"
+        "         COALESCE((metadata->>'child_start')::int, -1) AS child_start,"
+        "         COALESCE((metadata->>'child_end')::int, -1) AS child_end"
+        "  FROM chunk_vector"
+        f"  WHERE owner_id='{owner_id}' AND kb_id='{kb_id}' AND doc_id='{doc_id}'"
+        "  ORDER BY COALESCE((metadata->>'child_start')::int, 0)"
+        ") t;"
     )
-    chunks = []
-    for line in rows.splitlines():
-        if not line.strip():
-            continue
-        parts = line.split("|", 3)
-        if len(parts) < 4:
-            continue
-        cid, parent_id, content, meta = parts
-        try:
-            metadata = json.loads(meta)
-        except ValueError:
-            metadata = {}
-        chunks.append(
-            {
-                "id": cid,
-                "parent_id": parent_id,
-                "content": content,
-                "start": int(metadata.get("start", -1)),
-                "end": int(metadata.get("end", -1)),
-            }
-        )
-    return chunks
+    raw = run_sql_in_container(container, sql).strip()
+    if not raw:
+        return []
+    try:
+        return json.loads(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"子块 JSON 解析失败: {exc}") from exc
 
 
 def bind_case_spans(
     api: Api, container: str, owner_id: str, kb_id: str, span: dict, doc_texts: dict[str, str]
 ) -> tuple[list[str], list[str]]:
-    """内容优先绑定：子块内容包含于区间文本，或区间文本包含于子块；校验覆盖。"""
+    """按字符区间重叠把人工证据区间绑定到真实子块。
+
+    子块是 300 字符的切片，人工区间可能跨子块边界，因此先用 child_start/child_end
+    做区间重叠判定（精确、不受换行影响），再用文本包含做兜底，最后校验区间文本
+    能被所选子块完全覆盖。
+    """
     doc_id = span["document_id"]
     span_text = span["quote"]
     chunks = bind_spans(api, container, owner_id, kb_id, doc_id)
     if not chunks:
         return [], [f"{doc_id[:12]}… 无任何子块"]
-    contained = [c for c in chunks if c["content"] in span_text]
-    covering = [c for c in chunks if span_text in c["content"]]
-    picked = contained or covering
-    problems = []
+    s0, s1 = int(span["start"]), int(span["end"])
+    problems: list[str] = []
+    picked = [
+        c
+        for c in chunks
+        if c["child_start"] >= 0 and c["child_start"] < s1 and c["child_end"] > s0
+    ]
     if not picked:
-        problems.append(f"{doc_id[:12]}… 区间无完全匹配子块（contained={len(contained)}, covering={len(covering)}）")
-    # 覆盖校验：区间文本应被所选子块内容联合覆盖
-    union = "".join(c["content"] for c in picked)
-    if span_text not in union:
-        problems.append(f"{doc_id[:12]}… 覆盖校验失败")
+        # 兜底：偏移不可用时退回文本包含判定
+        picked = [c for c in chunks if c["content"] in span_text or span_text in c["content"]]
+        if not picked:
+            problems.append(f"{doc_id[:12]}… 区间与任何子块无重叠（偏移与文本匹配均失败）")
+            return [], problems
+        problems.append(f"{doc_id[:12]}… 偏移不可用，退回文本匹配绑定")
+    # 覆盖校验：子块按文档序拼接后应包含区间文本
+    union = "".join(c["content"] for c in sorted(picked, key=lambda c: c["child_start"]))
+    if span_text.strip() not in union and not any(
+        c["content"].strip() == span_text.strip() for c in picked
+    ):
+        problems.append(f"{doc_id[:12]}… 覆盖校验失败（子块拼接不完全包含区间文本）")
     return [c["id"] for c in picked], problems
 
 
@@ -305,28 +332,32 @@ def put_config(api: Api, kb_id: str, strategy: str) -> None:
     log(f"  策略 {strategy} 配置已生效: {json.dumps({k: resp['data'][k] for k in ('hybrid', 'rerank')}, ensure_ascii=False)}")
 
 
-def build_case_payload(chunk: list[dict]) -> list[dict]:
-    return [
-        {
+def build_case_payload(chunk: list[dict], child_labels: str = "omit") -> list[dict]:
+    """child_labels=human 时才提交子块标注；否则辅助 P/R/F1 记为缺失，
+    避免把非人工核验的标注声明为 human。"""
+    payload = []
+    for c in chunk:
+        item = {
             "question": c["question"],
             "reference_answer": c["reference_answer"],
             "reference_facts": c["facts"],
             "answerable": True,
             "relevant_document_ids": c["relevant_document_ids"],
-            "relevant_child_ids": c["relevant_child_ids"] or None,
-            "annotation_method": "human",
         }
-        for c in chunk
-    ]
+        if child_labels == "human":
+            item["relevant_child_ids"] = c["relevant_child_ids"] or None
+            item["annotation_method"] = "human"
+        payload.append(item)
+    return payload
 
 
-def submit_and_collect(api: Api, kb_id: str, strategy: str, chunk: list[dict]) -> list[dict]:
+def submit_and_collect(api: Api, kb_id: str, strategy: str, chunk: list[dict], child_labels: str = "omit") -> list[dict]:
     """提交一个批次并取回结果；失败返回空列表由上层重试。"""
     body = {
         "kb_id": kb_id,
         # 协议要求三档统一 rag 模式，隔离检索策略差异（关闭 agent 循环）
         "mode": "rag",
-        "cases": build_case_payload(chunk),
+        "cases": build_case_payload(chunk, child_labels),
     }
     try:
         resp = api.req("POST", "/api/evaluations", body, timeout=300)
@@ -343,7 +374,8 @@ def submit_and_collect(api: Api, kb_id: str, strategy: str, chunk: list[dict]) -
 
 
 def run_strategy(
-    api: Api, kb_id: str, strategy: str, cases: list[dict], batch: int, parallel: int
+    api: Api, kb_id: str, strategy: str, cases: list[dict], batch: int, parallel: int,
+    child_labels: str = "omit",
 ) -> list[dict]:
     put_config(api, kb_id, strategy)
     batches = [cases[i : i + batch] for i in range(0, len(cases), batch)]
@@ -352,14 +384,14 @@ def run_strategy(
     from concurrent.futures import ThreadPoolExecutor
 
     with ThreadPoolExecutor(max_workers=max(1, parallel)) as pool:
-        futures = [pool.submit(submit_and_collect, api, kb_id, strategy, b) for b in batches]
+        futures = [pool.submit(submit_and_collect, api, kb_id, strategy, b, child_labels) for b in batches]
         for idx, (b, fut) in enumerate(zip(batches, futures), 1):
             got = fut.result()
             if not got:
                 # 批次整体失败：退回单题重试，避免整批丢失
                 log(f"  批次 {idx}/{len(batches)} 失败，单题重试 {len(b)} 题")
                 for c in b:
-                    got.extend(submit_and_collect(api, kb_id, strategy, [c]))
+                    got.extend(submit_and_collect(api, kb_id, strategy, [c], child_labels))
                 results.extend(got)
                 continue
             results.extend(got)
@@ -395,7 +427,10 @@ def main() -> None:
     parser.add_argument("--parallel", type=int, default=4, help="并行批次数；受平台 MODEL_CONCURRENCY 约束")
     parser.add_argument("--batch-size", type=int, default=1, help="每批题数；服务端单请求 300s 超时、单题约 100s，默认 1 最稳，失败仅损失该题")
     parser.add_argument("--check-only", action="store_true", help="只校验人工确认文件，不调用任何服务")
-    parser.add_argument("--allow-excluded", action="store_true", help="确认排除被标记为 noev/flag 的验收题（需在报告中如实记录）")
+    parser.add_argument("--allow-excluded", action="store_true", help="确认排除被标记为 noev 的验收题（需在报告中如实记录）")
+    parser.add_argument("--include-flagged", action="store_true", help="把存疑题的修正答案纳入评测（逐条记录存疑说明）")
+    parser.add_argument("--child-labels", choices=["human", "omit"], default="omit",
+                        help="human：向平台提交人工子块标注（需真实人工核验）；omit：不提交，辅助 P/R/F1 记为缺失（默认）")
     parser.add_argument("--kb-id", help="复用已入库的评测知识库（跳过上传，校验 ready 后直接评测）")
     parser.add_argument("--ingest-only", action="store_true", help="只完成入库与索引冻结后退出，输出知识库 ID")
     args = parser.parse_args()
@@ -423,13 +458,16 @@ def main() -> None:
             sys.exit(0 if ok else 1)
         if review["missing"]:
             raise SystemExit("存在未完成核对的验收题，先完成核对再运行")
-        if (review["noev"] or review["flagged"]) and not args.allow_excluded:
-            print("以下验收题被标记为无证据/存疑，默认不排除以免静默少算：")
-            for t in review["noev"]:
-                print("  noev  :", t)
+        if review["flagged"] and not (args.allow_excluded or args.include_flagged):
+            print("以下验收题被标记为存疑，默认既不排除也不用：")
             for t in review["flagged"]:
                 print("  flag  :", t)
-            raise SystemExit("请先在核对工具中解决，或显式传 --allow-excluded 确认排除")
+            raise SystemExit("请传 --include-flagged（用其修正答案纳入）或 --allow-excluded（排除）")
+        if review["noev"] and not args.allow_excluded:
+            print("以下验收题被标记为无证据：")
+            for t in review["noev"]:
+                print("  noev  :", t)
+            raise SystemExit("请确认后传 --allow-excluded 排除")
 
     creds = {
         row[0]: row[1]
@@ -502,7 +540,7 @@ def main() -> None:
     crud = {c["case_id"]: c for c in json.loads((PREPARED / "crud" / "cases.json").read_text(encoding="utf-8"))}
     cases = []
     fact_report = []
-    for t in review["done"]:
+    for t in review["includable"]:
         c = crud[t]
         rec = review["cases"][t]
         texts = []
@@ -513,9 +551,26 @@ def main() -> None:
         facts, dropped = [], []
         for f in raw_facts:
             (facts if verify_fact(f, texts, rec["confirmed_answer"]) else dropped).append(f)
-        fact_report.append({"case_id": t, "raw": raw_facts, "kept": facts, "dropped": dropped})
+        fallback_used = False
         if not facts:
-            raise SystemExit(f"案例 {t} 无可用事实（丢弃 {len(dropped)} 条）")
+            # 模型分解与逐字校验冲突时，回退为答案的标点切分：
+            # 切分片段必然是确认答案的逐字子串，保持可追溯性，避免整题丢弃。
+            facts = [
+                part.strip()
+                for part in re.split(r"[。；;，、]", rec["confirmed_answer"])
+                if len(part.strip()) >= 4
+            ] or [rec["confirmed_answer"].strip()]
+            fallback_used = True
+            log(f"  {t[:36]}… 模型事实全部未通过逐字校验（{len(dropped)} 条），回退答案切分")
+        fact_report.append(
+            {
+                "case_id": t,
+                "raw": raw_facts,
+                "kept": facts,
+                "dropped": dropped,
+                "fallback_used": fallback_used,
+            }
+        )
         cases.append(
             {
                 "question": c["question"],
@@ -575,7 +630,9 @@ def main() -> None:
     all_results: dict[str, list[dict]] = {}
     for strategy in strategies:
         log(f"=== 策略 {strategy} ===")
-        all_results[strategy] = run_strategy(api, kb_id, strategy, cases, args.batch_size, args.parallel)
+        all_results[strategy] = run_strategy(
+            api, kb_id, strategy, cases, args.batch_size, args.parallel, args.child_labels
+        )
 
     # 7. 汇总与导出
     report = {
@@ -605,6 +662,15 @@ def main() -> None:
             for c in cases
         },
         "bind_problems": bind_problems,
+        "annotation": {
+            "provenance": review["provenance"],
+            "child_labels_submitted": args.child_labels == "human",
+            "child_labels_note": "omit：未向平台提交子块标注，辅助 P/R/F1 记为缺失（非人工核验标注不得声明为 human）",
+            "flagged_notes": {
+                t: (review["cases"][t].get("notes") or "")[:500] for t in review["flagged"]
+            },
+            "included_flagged": bool(args.include_flagged),
+        },
         "cases_noev": review["noev"],
         "cases_flagged": review["flagged"],
     }

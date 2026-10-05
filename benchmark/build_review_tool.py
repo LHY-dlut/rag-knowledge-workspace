@@ -303,7 +303,10 @@ function saveCase(kind){
   renderList();renderMain();
 }
 function exportJson(){
-  const reviewer=(localStorage.getItem(LS_NAME)||prompt("审阅者署名（如 LHY）：")||"unnamed").trim();
+  // 署名决定标签来源，每次导出都必须由本人确认，不能沿用导入的他人署名
+  const current=localStorage.getItem(LS_NAME)||"";
+  const reviewer=(prompt("审阅者署名（请填本人姓名或账号，此字段代表标签来源，不应填写他人/AI 名称）：",current)||"").trim();
+  if(!reviewer){alert("未填写审阅者，导出取消。");return;}
   localStorage.setItem(LS_NAME,reviewer);
   const out={
     reviewer:reviewer,
