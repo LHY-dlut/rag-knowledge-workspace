@@ -360,7 +360,7 @@ def main() -> None:
     parser.add_argument("--api-base", required=True)
     parser.add_argument("--username", required=True)
     parser.add_argument("--password", required=True)
-    parser.add_argument("--review-file", type=Path, required=True)
+    parser.add_argument("--review-file", type=Path, help="人工确认文件；--ingest-only 时可省略")
     parser.add_argument("--credentials-csv", type=Path, required=True)
     parser.add_argument("--pg-container", default="zhixu-rag-v81-postgres-1")
     parser.add_argument("--out-dir", type=Path, default=Path(__file__).resolve().parent / "out")
@@ -368,33 +368,40 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--check-only", action="store_true", help="只校验人工确认文件，不调用任何服务")
     parser.add_argument("--allow-excluded", action="store_true", help="确认排除被标记为 noev/flag 的验收题（需在报告中如实记录）")
+    parser.add_argument("--kb-id", help="复用已入库的评测知识库（跳过上传，校验 ready 后直接评测）")
+    parser.add_argument("--ingest-only", action="store_true", help="只完成入库与索引冻结后退出，输出知识库 ID")
     args = parser.parse_args()
 
-    review = load_review(args.review_file)
-    log(
-        f"人工确认: done={len(review['done'])} noev={len(review['noev'])} "
-        f"flag={len(review['flagged'])} 未完成={len(review['missing'])}"
-    )
-    if args.check_only:
-        for t in review["missing"]:
-            print("  未完成:", t)
-        for t in review["noev"]:
-            print("  无证据:", t)
-        for t in review["flagged"]:
-            print("  存疑  :", t)
-        ok = not review["missing"] and not review["noev"] and not review["flagged"]
-        print("校验结论:", "可以运行正式评测" if ok else "需先解决上述条目")
-        sys.exit(0 if ok else 1)
-
-    if review["missing"]:
-        raise SystemExit("存在未完成核对的验收题，先完成核对再运行")
-    if (review["noev"] or review["flagged"]) and not args.allow_excluded:
-        print("以下验收题被标记为无证据/存疑，默认不排除以免静默少算：")
-        for t in review["noev"]:
-            print("  noev  :", t)
-        for t in review["flagged"]:
-            print("  flag  :", t)
-        raise SystemExit("请先在核对工具中解决，或显式传 --allow-excluded 确认排除")
+    # --ingest-only 只做入库与冻结，不依赖人工核对进度
+    review = None
+    if args.review_file and args.review_file.exists():
+        review = load_review(args.review_file)
+    if not args.ingest_only:
+        if review is None:
+            raise SystemExit("正式评测需要 --review-file 指向人工确认文件")
+        log(
+            f"人工确认: done={len(review['done'])} noev={len(review['noev'])} "
+            f"flag={len(review['flagged'])} 未完成={len(review['missing'])}"
+        )
+        if args.check_only:
+            for t in review["missing"]:
+                print("  未完成:", t)
+            for t in review["noev"]:
+                print("  无证据:", t)
+            for t in review["flagged"]:
+                print("  存疑  :", t)
+            ok = not review["missing"] and not review["noev"] and not review["flagged"]
+            print("校验结论:", "可以运行正式评测" if ok else "需先解决上述条目")
+            sys.exit(0 if ok else 1)
+        if review["missing"]:
+            raise SystemExit("存在未完成核对的验收题，先完成核对再运行")
+        if (review["noev"] or review["flagged"]) and not args.allow_excluded:
+            print("以下验收题被标记为无证据/存疑，默认不排除以免静默少算：")
+            for t in review["noev"]:
+                print("  noev  :", t)
+            for t in review["flagged"]:
+                print("  flag  :", t)
+            raise SystemExit("请先在核对工具中解决，或显式传 --allow-excluded 确认排除")
 
     creds = {
         row[0]: row[1]
@@ -413,25 +420,32 @@ def main() -> None:
         token = api.req("POST", "/api/auth/login", {"username": args.username, "password": args.password})["data"]["access_token"]
         log("注册并登录成功")
     api = Api(args.api_base, token)
-    kb = api.req("POST", "/api/knowledge-bases", {"name": f"bench-crud-{time.strftime('%m%d-%H%M')}", "description": "CRUD-RAG 公开基准 · 隔离评测库"})["data"]
-    kb_id = kb["id"]
-    log(f"知识库 {kb_id}")
-
-    # 3. 上传语料
     allow = fetch_allowlist()
-    log(f"上传 {len(allow)} 份语料 …")
-    for i, item in enumerate(allow, 1):
-        p = Path(item["path"])
-        if not p.exists():
-            raise SystemExit(f"语料缺失: {p}")
-        api.upload(f"/api/knowledge-bases/{kb_id}/documents", p)
-        if i % 50 == 0:
-            log(f"  已上传 {i}/{len(allow)}")
-    ready, failed = wait_ready(api, kb_id, len(allow))
-    if failed:
-        log(f"  !! {len(failed)} 份入库失败，检查后重跑")
-        for f in failed[:5]:
-            log(f"    失败: {f['filename']} {f.get('error', '')}")
+    if args.kb_id:
+        kb_id = args.kb_id
+        log(f"复用知识库 {kb_id}")
+        ready, failed = wait_ready(api, kb_id, len(allow), max_wait=120)
+        if len(ready) < len(allow):
+            raise SystemExit(f"复用库 ready 文档 {len(ready)} 少于语料 {len(allow)}，不能评测")
+    else:
+        kb = api.req("POST", "/api/knowledge-bases", {"name": f"bench-crud-{time.strftime('%m%d-%H%M')}", "description": "CRUD-RAG 公开基准 · 隔离评测库"})["data"]
+        kb_id = kb["id"]
+        log(f"知识库 {kb_id}")
+
+        # 3. 上传语料
+        log(f"上传 {len(allow)} 份语料 …")
+        for i, item in enumerate(allow, 1):
+            p = Path(item["path"])
+            if not p.exists():
+                raise SystemExit(f"语料缺失: {p}")
+            api.upload(f"/api/knowledge-bases/{kb_id}/documents", p)
+            if i % 50 == 0:
+                log(f"  已上传 {i}/{len(allow)}")
+        ready, failed = wait_ready(api, kb_id, len(allow))
+        if failed:
+            log(f"  !! {len(failed)} 份入库失败，检查后重跑")
+            for f in failed[:5]:
+                log(f"    失败: {f['filename']} {f.get('error', '')}")
     kb_list = api.req("GET", "/api/knowledge-bases")["data"]
     kb_now = next((k for k in kb_list if k["id"] == kb_id), {})
     freeze = {
@@ -444,6 +458,17 @@ def main() -> None:
         ],
     }
     log(f"索引冻结: {len(ready)} 份 ready 文档, kb_revision={freeze['kb_revision']}")
+    if args.ingest_only:
+        args.out_dir.mkdir(parents=True, exist_ok=True)
+        state_path = args.out_dir / "ingested_kb.json"
+        state_path.write_text(
+            json.dumps({"kb_id": kb_id, "freeze": freeze, "documents_total": len(ready)}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        log(f"仅入库模式完成。知识库 ID: {kb_id}")
+        log(f"正式评测加参数: --kb-id {kb_id}")
+        log(f"状态文件: {state_path}")
+        return
 
     # 4. 原子事实
     crud = {c["case_id"]: c for c in json.loads((PREPARED / "crud" / "cases.json").read_text(encoding="utf-8"))}

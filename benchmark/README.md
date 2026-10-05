@@ -22,13 +22,28 @@ python build_review_tool.py
 # 冻结数据目录通过环境变量指定（默认 ../prepared_v2）
 export BENCH_PREPARED_DIR=/path/to/public_benchmarks_20261002/prepared_v2
 
+# 1) 先校验人工确认文件完整性（不调用任何服务）
+python run_crud_benchmark.py \
+  --api-base http://127.0.0.1:18790 \
+  --username bench_admin --password <password> \
+  --review-file /path/to/human_review_confirmed_v1.json \
+  --check-only
+
+# 2) 预入库并冻结索引（可在人工核对期间先做，只有 embedding 成本）
+python run_crud_benchmark.py --api-base http://127.0.0.1:18790 \
+  --username bench_admin --password <password> --ingest-only
+
+# 3) 正式三档评测（复用已冻结的索引）
 python run_crud_benchmark.py \
   --api-base http://127.0.0.1:18790 \
   --username bench_admin --password <password> \
   --review-file /path/to/human_review_confirmed_v1.json \
   --credentials-csv /path/to/credentials.csv \
   --pg-container <compose项目名>-postgres-1 \
-  --check-only          # 先校验人工确认文件完整性，不调用任何服务
+  --kb-id <第 2 步输出的知识库 ID>
+
+# 4) 生成 Markdown 汇总
+python make_report.py out/crud_bench_report_<时间戳>.json
 ```
 
 流程：校验人工确认 → 注册/登录 → 创建隔离评测知识库 → 上传 314 份
