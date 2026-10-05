@@ -76,7 +76,9 @@ class Api:
 
     def upload(self, path: str, filepath: Path, tags: str = "", timeout: int = 300):
         if HAS_HTTPX:
-            with httpx.Client(base_url=self.base, timeout=timeout) as client:
+            # trust_env=False：httpx 默认会读 Windows 注册表系统代理并代理 127.0.0.1，
+            # 而本地代理（Clash 等）无法回环转发，导致 502；回环流量必须直连。
+            with httpx.Client(base_url=self.base, timeout=timeout, trust_env=False) as client:
                 resp = client.post(
                     path,
                     headers={"Authorization": f"Bearer {self.token}"},
@@ -195,11 +197,24 @@ def verify_fact(fact: str, evidence_texts: list[str], answer: str) -> bool:
     return False
 
 
+PG_USER = os.environ.get("BENCH_PG_USER", "rag")
+PG_DB = os.environ.get("BENCH_PG_DB", "rag_vectors")
+
+
 def run_sql_in_container(container: str, sql: str) -> str:
+    """在 PG 容器内执行只读 SQL；凭据来自容器自身环境，不在命令行出现密码。"""
     import subprocess
 
     proc = subprocess.run(
-        ["docker", "exec", container, "psql", "-U", "postgres", "-d", "vectors", "-tAc", sql],
+        [
+            "docker",
+            "exec",
+            container,
+            "sh",
+            "-c",
+            f'PGPASSWORD="$POSTGRES_PASSWORD" psql --host=127.0.0.1 '
+            f'--username="$POSTGRES_USER" --dbname="$POSTGRES_DB" -tAc {json.dumps(sql)}',
+        ],
         capture_output=True,
         text=True,
         timeout=120,
@@ -352,6 +367,7 @@ def main() -> None:
     parser.add_argument("--strategies", default="dense,hybrid,full")
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--check-only", action="store_true", help="只校验人工确认文件，不调用任何服务")
+    parser.add_argument("--allow-excluded", action="store_true", help="确认排除被标记为 noev/flag 的验收题（需在报告中如实记录）")
     args = parser.parse_args()
 
     review = load_review(args.review_file)
@@ -362,10 +378,23 @@ def main() -> None:
     if args.check_only:
         for t in review["missing"]:
             print("  未完成:", t)
-        sys.exit(0 if not review["missing"] else 1)
+        for t in review["noev"]:
+            print("  无证据:", t)
+        for t in review["flagged"]:
+            print("  存疑  :", t)
+        ok = not review["missing"] and not review["noev"] and not review["flagged"]
+        print("校验结论:", "可以运行正式评测" if ok else "需先解决上述条目")
+        sys.exit(0 if ok else 1)
 
     if review["missing"]:
         raise SystemExit("存在未完成核对的验收题，先完成核对再运行")
+    if (review["noev"] or review["flagged"]) and not args.allow_excluded:
+        print("以下验收题被标记为无证据/存疑，默认不排除以免静默少算：")
+        for t in review["noev"]:
+            print("  noev  :", t)
+        for t in review["flagged"]:
+            print("  flag  :", t)
+        raise SystemExit("请先在核对工具中解决，或显式传 --allow-excluded 确认排除")
 
     creds = {
         row[0]: row[1]
@@ -384,10 +413,8 @@ def main() -> None:
         token = api.req("POST", "/api/auth/login", {"username": args.username, "password": args.password})["data"]["access_token"]
         log("注册并登录成功")
     api = Api(args.api_base, token)
-    me = api.req("GET", "/api/auth/me") if False else None  # 占位；平台无 /me 时忽略
-
     kb = api.req("POST", "/api/knowledge-bases", {"name": f"bench-crud-{time.strftime('%m%d-%H%M')}", "description": "CRUD-RAG 公开基准 · 隔离评测库"})["data"]
-    kb_id, owner_hint = kb["id"], None
+    kb_id = kb["id"]
     log(f"知识库 {kb_id}")
 
     # 3. 上传语料
@@ -405,16 +432,18 @@ def main() -> None:
         log(f"  !! {len(failed)} 份入库失败，检查后重跑")
         for f in failed[:5]:
             log(f"    失败: {f['filename']} {f.get('error', '')}")
+    kb_list = api.req("GET", "/api/knowledge-bases")["data"]
+    kb_now = next((k for k in kb_list if k["id"] == kb_id), {})
     freeze = {
         "kb_id": kb_id,
         "frozen_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "kb_revision": kb_now.get("revision"),
         "documents": [
             {"id": d["id"], "filename": d["filename"], "status": d["status"], "index_revision": d.get("index_revision")}
             for d in ready
         ],
-        "kb_revision": api.req("GET", "/api/knowledge-bases")["data"],
     }
-    log(f"索引冻结: {len(ready)} 份 ready 文档")
+    log(f"索引冻结: {len(ready)} 份 ready 文档, kb_revision={freeze['kb_revision']}")
 
     # 4. 原子事实
     crud = {c["case_id"]: c for c in json.loads((PREPARED / "crud" / "cases.json").read_text(encoding="utf-8"))}
@@ -458,11 +487,18 @@ def main() -> None:
         raise SystemExit("PG 中找不到上传文档的子块，绑定中止")
     owner_id, pg_kb_id = owner_rows.split("|")
     log(f"绑定依据: owner={owner_id[:8]}… kb={pg_kb_id[:8]}…")
+    # 外部语料 ID → 平台文档 UUID：上传文件名为 doc-<sha>.txt
+    ext_to_platform = {Path(d["filename"]).stem: d["id"] for d in ready}
     bind_problems = []
     for c in cases:
         c["relevant_child_ids"] = []
         for span in c["spans"]:
-            ids, problems = bind_case_spans(api, args.pg_container, owner_id, pg_kb_id, span, {})
+            platform_doc = ext_to_platform.get(span["document_id"])
+            if platform_doc is None:
+                bind_problems.append(f"外部文档 {span['document_id'][:16]}… 不在本次 ready 集合中")
+                continue
+            local_span = dict(span, document_id=platform_doc)
+            ids, problems = bind_case_spans(api, args.pg_container, owner_id, pg_kb_id, local_span, {})
             c["relevant_child_ids"].extend(ids)
             bind_problems.extend(problems)
         c["relevant_child_ids"] = sorted(set(c["relevant_child_ids"]))

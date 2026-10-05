@@ -156,6 +156,8 @@ kbd{background:#eef0f2;border:1px solid var(--line);border-radius:4px;padding:0 
 <span class="meta">准备 manifest SHA256: <span id="manifestSha"></span> · 构建于 <span id="builtAt"></span></span>
 <span class="spacer"></span>
 <span class="progress" id="progress"></span>
+<button id="importBtn" title="从已导出的确认文件恢复进度">导入进度</button>
+<input type="file" id="importFile" accept=".json" style="display:none">
 <button id="exportBtn" class="primary">导出确认文件</button>
 </header>
 <div class="layout">
@@ -291,9 +293,13 @@ function saveCase(kind){
   if(kind==="done"&&!st.spans.length&&!confirm("未选择任何证据区间，仍按「确认」保存？建议对无证据题使用「标记无相关证据」。"))return;
   st.review_status=kind;
   st.confirmed_at=new Date().toISOString();
-  saveState();renderList();
-  const next=visible().findIndex(v=>v.i===currentIdx);
-  if(next>=0&&next<visible().length-1){currentIdx=visible()[next+1].i;}
+  saveState();
+  // 前进到下一题：当前题在当前筛选下可能已消失（如“待核对”筛选），此时取其后第一条
+  const vis=visible();
+  let nextIdx=vis.findIndex(v=>v.i===currentIdx);
+  if(nextIdx===-1)nextIdx=vis.findIndex(v=>v.i>currentIdx);
+  if(nextIdx===-1)nextIdx=Math.max(vis.length-1,0);
+  if(nextIdx>=0&&vis.length)currentIdx=vis[nextIdx].i;
   renderList();renderMain();
 }
 function exportJson(){
@@ -322,9 +328,36 @@ function exportJson(){
   URL.revokeObjectURL(a.href);
   alert(`已导出 ${out.cases.filter(x=>x.review_status!=="pending").length}/${DATA.cases.length} 条。请将文件保存到 prepared_v2/ 目录（文件名保持 human_review_confirmed_v1.json）。`);
 }
+function importJson(file){
+  const reader=new FileReader();
+  reader.onload=()=>{
+    try{
+      const data=JSON.parse(reader.result);
+      if(!Array.isArray(data.cases))throw new Error("缺少 cases 数组");
+      let n=0;
+      data.cases.forEach(c=>{
+        if(!state[c.case_id])return;
+        if(c.review_status&&c.review_status!=="pending"){
+          state[c.case_id].review_status=c.review_status;
+          state[c.case_id].confirmed_answer=c.confirmed_answer??null;
+          state[c.case_id].spans=c.confirmed_evidence_spans||[];
+          state[c.case_id].notes=c.notes||"";
+          state[c.case_id].confirmed_at=c.confirmed_at||null;
+          n++;
+        }
+      });
+      if(data.reviewer)localStorage.setItem(LS_NAME,data.reviewer);
+      saveState();renderList();renderMain();
+      alert(`已导入 ${n} 条已核对记录（覆盖同 ID 记录）。`);
+    }catch(e){alert("导入失败: "+e.message);}
+  };
+  reader.readAsText(file,"utf-8");
+}
 document.getElementById("manifestSha").textContent=DATA.prepared_manifest_sha256.slice(0,16)+"…";
 document.getElementById("builtAt").textContent=DATA.built_at;
 document.getElementById("exportBtn").onclick=exportJson;
+document.getElementById("importBtn").onclick=()=>document.getElementById("importFile").click();
+document.getElementById("importFile").onchange=(e)=>{if(e.target.files[0])importJson(e.target.files[0]);e.target.value="";};
 document.querySelectorAll(".filters button").forEach(b=>b.onclick=()=>{
   document.querySelectorAll(".filters button").forEach(x=>x.classList.remove("active"));
   b.classList.add("active");filter=b.dataset.f;currentIdx=0;renderList();renderMain();
