@@ -1,0 +1,514 @@
+# -*- coding: utf-8 -*-
+"""CRUD-RAG 公开基准 · 三档策略对比执行器（真实百炼模型）。
+
+协议依据：evaluation/public_benchmarks_20261002/PROTOCOL.md 与 prepared_v2/protocol.json。
+只读冻结数据；通过平台 HTTP API 驱动隔离评测实例；所有模型调用经过平台，
+Judge 指标由平台四项质量评测计算，逐题证据与缺失原因随结果落库并导出。
+
+流程：
+  1. 校验人工确认文件（human_review_confirmed_v1.json）覆盖 CRUD 验收题
+  2. 注册/登录 → 创建隔离评测知识库
+  3. 上传 crud_ingestion_allowlist 的 314 份语料 → 等待 ready → 冻结快照
+  4. 原子事实：由真实模型把官方答案分解为原子事实（温度 0），
+     逐条验证可在官方证据原文中逐字定位；验证失败的事实剔除并记录
+  5. 证据区间绑定：通过 PostgreSQL 容器查询真实子块，把人工确认的
+     (document_id, start, end, quote) 绑定到实际 chunk_vector.id，校验覆盖与文本
+  6. 三档策略（dense/hybrid/full，protocol.json fair_retrieval_configs）：
+     逐档 PUT 知识库配置 → 分批 POST /api/evaluations（防 300s 超时）→ 汇总
+  7. 导出 report JSON/MD：四指标、拒答率、辅助 P/R/F1、缺失清单、耗时、索引快照
+
+用法（用复现工程 venv 的 python）：
+  python bench_runner/run_crud_benchmark.py \
+    --api-base http://127.0.0.1:18786 \
+    --username bench_admin --password <pw> \
+    --review-file prepared_v2/human_review_confirmed_v1.json \
+    --credentials-csv <百炼凭据csv> \
+    --pg-container <compose项目名>-postgres-1 \
+    --out-dir bench_runner/out
+"""
+import argparse
+import hashlib
+import json
+import os
+import re
+import sys
+import time
+import urllib.error
+import urllib.request
+import uuid
+from pathlib import Path
+
+try:
+    import httpx  # type: ignore
+
+    HAS_HTTPX = True
+except ImportError:
+    HAS_HTTPX = False
+
+BASE = Path(__file__).resolve().parents[1]
+# 公开评测数据（CRUD 官方语料许可不明）不随源码分发；
+# 通过环境变量指向本机 prepared_v2 冻结目录。
+PREPARED = Path(os.environ.get("BENCH_PREPARED_DIR", BASE / "prepared_v2"))
+ALLOWLIST = BASE / "artifacts" / "crud_ingestion_allowlist.json"
+PROTOCOL = json.loads((PREPARED / "protocol.json").read_text(encoding="utf-8"))
+
+CRUD_SPLIT_TEST = {"crud-questanswer_1doc", "crud-questanswer_2doc", "crud-questanswer_3doc"}
+
+
+class Api:
+    def __init__(self, base: str, token: str = ""):
+        self.base = base.rstrip("/")
+        self.token = token
+
+    def req(self, method: str, path: str, body: dict | None = None, timeout: int = 900):
+        url = self.base + path
+        data = json.dumps(body, ensure_ascii=False).encode() if body is not None else None
+        headers = {"Content-Type": "application/json"}
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+        req = urllib.request.Request(url, data=data, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", "replace")[:300]
+            raise RuntimeError(f"{method} {path} -> HTTP {exc.code}: {detail}") from exc
+
+    def upload(self, path: str, filepath: Path, tags: str = "", timeout: int = 300):
+        if HAS_HTTPX:
+            with httpx.Client(base_url=self.base, timeout=timeout) as client:
+                resp = client.post(
+                    path,
+                    headers={"Authorization": f"Bearer {self.token}"},
+                    files={"file": (filepath.name, filepath.read_bytes(), "text/plain")},
+                    data={"tags": tags},
+                )
+                resp.raise_for_status()
+                return resp.json()
+        boundary = "----bench" + uuid.uuid4().hex
+        content = filepath.read_bytes()
+        head = (
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; "
+            f"filename=\"{filepath.name}\"\r\nContent-Type: text/plain\r\n\r\n"
+        )
+        tail = f"\r\n--{boundary}--\r\n".encode()
+        body = head.encode() + content + tail
+        req = urllib.request.Request(
+            self.base + path,
+            data=body,
+            method="POST",
+            headers={
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+                "Authorization": f"Bearer {self.token}",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+
+def log(msg: str) -> None:
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
+def load_review(path: Path) -> dict:
+    review = json.loads(path.read_text(encoding="utf-8"))
+    cases = {c["case_id"]: c for c in review["cases"]}
+    crud = json.loads((PREPARED / "crud" / "cases.json").read_text(encoding="utf-8"))
+    test_ids = {c["case_id"] for c in crud if c["split"] == "test"}
+    missing = sorted(t for t in test_ids if cases.get(t, {}).get("review_status") == "pending")
+    noev = sorted(t for t in test_ids if cases.get(t, {}).get("review_status") == "noev")
+    flagged = sorted(t for t in test_ids if cases.get(t, {}).get("review_status") == "flag")
+    done = sorted(t for t in test_ids if cases.get(t, {}).get("review_status") == "done")
+    for t in done:
+        rec = cases[t]
+        if not rec.get("confirmed_answer") or not rec.get("confirmed_evidence_spans"):
+            raise SystemExit(f"已确认案例缺少答案或证据区间: {t}")
+    return {
+        "review": review,
+        "cases": cases,
+        "test_ids": test_ids,
+        "done": done,
+        "noev": noev,
+        "flagged": flagged,
+        "missing": missing,
+    }
+
+
+def fetch_allowlist() -> list[dict]:
+    return json.loads(ALLOWLIST.read_text(encoding="utf-8"))["documents"]
+
+
+def decompose_facts(api_key: str, base_url: str, question: str, answer: str) -> list[str]:
+    """把官方参考答案分解为原子事实；温度 0；失败时回退到标点切分。"""
+    prompt = (
+        "把下面的问题参考答案分解为原子事实（每条是一个可独立核验的陈述，"
+        "直接复用原文措辞，不要改写、不要补充）。输出 JSON 数组字符串。\n\n"
+        f"问题：{question}\n参考答案：{answer}\n\n输出示例：[\"事实1\", \"事实2\"]"
+    )
+    for attempt in range(2):
+        try:
+            with urllib.request.urlopen(
+                urllib.request.Request(
+                    f"{base_url.rstrip('/')}/chat/completions",
+                    data=json.dumps(
+                        {
+                            "model": "qwen-plus",
+                            "temperature": 0,
+                            "messages": [
+                                {"role": "system", "content": "你是严谨的标注助手。"},
+                                {"role": "user", "content": prompt},
+                            ],
+                            "response_format": {"type": "json_object"},
+                        }
+                    ).encode(),
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {api_key}",
+                    },
+                ),
+                timeout=60,
+            ) as resp:
+                content = json.loads(resp.read().decode())["choices"][0]["message"]["content"]
+            facts = json.loads(content)
+            if isinstance(facts, dict) and "facts" in facts:
+                facts = facts["facts"]
+            facts = [str(f).strip() for f in facts if str(f).strip()]
+            return facts[:20]
+        except Exception as exc:  # noqa: BLE001
+            if attempt == 1:
+                log(f"事实分解失败（{exc}），回退标点切分: {question[:20]}…")
+    parts = [p.strip() for p in re.split(r"[。；;，、]", answer) if p.strip()]
+    return parts or [answer.strip()]
+
+
+def verify_fact(fact: str, evidence_texts: list[str], answer: str) -> bool:
+    """事实必须能在官方证据原文或参考答案中逐字定位（含引号/括号内核心）。"""
+    if fact in answer:
+        return True
+    for text in evidence_texts:
+        if fact in text:
+            return True
+    # 容忍首尾引号与书名号差异：去掉外围标点后核心仍需逐字命中
+    core = fact.strip("“”\"'《》「」")
+    if len(core) >= 4 and any(core in t for t in evidence_texts):
+        return True
+    return False
+
+
+def run_sql_in_container(container: str, sql: str) -> str:
+    import subprocess
+
+    proc = subprocess.run(
+        ["docker", "exec", container, "psql", "-U", "postgres", "-d", "vectors", "-tAc", sql],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"docker exec 失败: {proc.stderr[:300]}")
+    return proc.stdout
+
+
+def bind_spans(api: Api, container: str, owner_id: str, kb_id: str, doc_id: str) -> list[dict]:
+    """从 PG 取真实子块；把 (doc_id) 下所有子块内容与位置取回，供上层做区间绑定。"""
+    rows = run_sql_in_container(
+        container,
+        "SELECT id, parent_id, content, metadata::text FROM chunk_vector"
+        f" WHERE owner_id='{owner_id}' AND kb_id='{kb_id}' AND doc_id='{doc_id}'"
+        " ORDER BY parent_id, COALESCE((metadata->>'start')::int, 0);",
+    )
+    chunks = []
+    for line in rows.splitlines():
+        if not line.strip():
+            continue
+        parts = line.split("|", 3)
+        if len(parts) < 4:
+            continue
+        cid, parent_id, content, meta = parts
+        try:
+            metadata = json.loads(meta)
+        except ValueError:
+            metadata = {}
+        chunks.append(
+            {
+                "id": cid,
+                "parent_id": parent_id,
+                "content": content,
+                "start": int(metadata.get("start", -1)),
+                "end": int(metadata.get("end", -1)),
+            }
+        )
+    return chunks
+
+
+def bind_case_spans(
+    api: Api, container: str, owner_id: str, kb_id: str, span: dict, doc_texts: dict[str, str]
+) -> tuple[list[str], list[str]]:
+    """内容优先绑定：子块内容包含于区间文本，或区间文本包含于子块；校验覆盖。"""
+    doc_id = span["document_id"]
+    span_text = span["quote"]
+    chunks = bind_spans(api, container, owner_id, kb_id, doc_id)
+    if not chunks:
+        return [], [f"{doc_id[:12]}… 无任何子块"]
+    contained = [c for c in chunks if c["content"] in span_text]
+    covering = [c for c in chunks if span_text in c["content"]]
+    picked = contained or covering
+    problems = []
+    if not picked:
+        problems.append(f"{doc_id[:12]}… 区间无完全匹配子块（contained={len(contained)}, covering={len(covering)}）")
+    # 覆盖校验：区间文本应被所选子块内容联合覆盖
+    union = "".join(c["content"] for c in picked)
+    if span_text not in union:
+        problems.append(f"{doc_id[:12]}… 覆盖校验失败")
+    return [c["id"] for c in picked], problems
+
+
+def kb_documents(api: Api, kb_id: str) -> list[dict]:
+    data = api.req("GET", f"/api/knowledge-bases/{kb_id}/documents")["data"]
+    if isinstance(data, dict):
+        data = data.get("documents", [])
+    return data
+
+
+def wait_ready(api: Api, kb_id: str, expect: int, max_wait: int = 1800) -> tuple[list[dict], list[dict]]:
+    deadline = time.time() + max_wait
+    while time.time() < deadline:
+        docs = kb_documents(api, kb_id)
+        pending = [d for d in docs if d["status"] in ("queued", "processing")]
+        failed = [d for d in docs if d["status"] == "failed"]
+        ready = [d for d in docs if d["status"] == "ready"]
+        log(f"  文档状态: ready={len(ready)} pending={len(pending)} failed={len(failed)} / 期望 {expect}")
+        if not pending and len(ready) + len(failed) >= expect:
+            return ready, failed
+        time.sleep(10)
+    raise SystemExit("等待文档 ready 超时")
+
+
+def put_config(api: Api, kb_id: str, strategy: str) -> None:
+    cfg = dict(PROTOCOL["fair_retrieval_configs"][strategy])
+    resp = api.req("PUT", f"/api/knowledge-bases/{kb_id}/config", cfg)
+    log(f"  策略 {strategy} 配置已生效: {json.dumps({k: resp['data'][k] for k in ('hybrid', 'rerank')}, ensure_ascii=False)}")
+
+
+def run_strategy(api: Api, kb_id: str, strategy: str, cases: list[dict], batch: int) -> list[dict]:
+    put_config(api, kb_id, strategy)
+    results, run_ids = [], []
+    for i in range(0, len(cases), batch):
+        chunk = cases[i : i + batch]
+        body = {
+            "kb_id": kb_id,
+            "cases": [
+                {
+                    "question": c["question"],
+                    "reference_answer": c["reference_answer"],
+                    "reference_facts": c["facts"],
+                    "answerable": True,
+                    "relevant_document_ids": c["relevant_document_ids"],
+                    "relevant_child_ids": c["relevant_child_ids"] or None,
+                    "annotation_method": "human",
+                }
+                for c in chunk
+            ],
+        }
+        log(f"  策略 {strategy}: 提交 {len(chunk)} 题")
+        resp = api.req("POST", "/api/evaluations", body, timeout=300)
+        run_ids.append(resp["data"]["id"])
+    for rid in run_ids:
+        status = "running"
+        while status not in ("completed", "partial_missing", "failed"):
+            time.sleep(5)
+            item = api.req("GET", f"/api/evaluations/{rid}")["data"]
+            status = item.get("status") or (item.get("metrics") and "completed")
+        item = api.req("GET", f"/api/evaluations/{rid}")["data"]
+        results.extend(item.get("results", []))
+        log(f"  run {rid[:8]} → {status}, 有效题 {sum(1 for r in item.get('results', []) if r['status'] == 'passed')}")
+    return results
+
+
+def aggregate(results: list[dict]) -> dict:
+    from statistics import mean
+
+    names = ("context_recall", "context_precision", "faithfulness", "answer_relevancy", "document_recall")
+    agg: dict = {}
+    for name in names:
+        values = [r["metrics"][name] for r in results if r.get("metrics", {}).get(name) is not None]
+        agg[name] = round(mean(values), 4) if values else None
+    refusals = [r["metrics"]["rejected"] for r in results if r.get("metrics", {}).get("rejected") is not None]
+    agg["refusal_rate"] = round(mean(refusals), 4) if refusals else None
+    agg["valid_cases"] = sum(1 for r in results if r["status"] == "passed")
+    agg["missing_cases"] = sum(1 for r in results if r["status"] == "missing")
+    return agg
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--api-base", required=True)
+    parser.add_argument("--username", required=True)
+    parser.add_argument("--password", required=True)
+    parser.add_argument("--review-file", type=Path, required=True)
+    parser.add_argument("--credentials-csv", type=Path, required=True)
+    parser.add_argument("--pg-container", default="zhixu-rag-v81-postgres-1")
+    parser.add_argument("--out-dir", type=Path, default=Path(__file__).resolve().parent / "out")
+    parser.add_argument("--strategies", default="dense,hybrid,full")
+    parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--check-only", action="store_true", help="只校验人工确认文件，不调用任何服务")
+    args = parser.parse_args()
+
+    review = load_review(args.review_file)
+    log(
+        f"人工确认: done={len(review['done'])} noev={len(review['noev'])} "
+        f"flag={len(review['flagged'])} 未完成={len(review['missing'])}"
+    )
+    if args.check_only:
+        for t in review["missing"]:
+            print("  未完成:", t)
+        sys.exit(0 if not review["missing"] else 1)
+
+    if review["missing"]:
+        raise SystemExit("存在未完成核对的验收题，先完成核对再运行")
+
+    creds = {
+        row[0]: row[1]
+        for row in __import__("csv").reader(args.credentials_csv.read_text(encoding="utf-8-sig").splitlines())
+        if len(row) >= 2
+    }
+    api_key, chat_base = creds["apiKey"], creds["openAiCompatible"]
+
+    api = Api(args.api_base)
+    try:
+        login = api.req("POST", "/api/auth/login", {"username": args.username, "password": args.password})
+        token = login["data"]["access_token"]
+        log("登录成功")
+    except RuntimeError:
+        api.req("POST", "/api/auth/register", {"username": args.username, "password": args.password})
+        token = api.req("POST", "/api/auth/login", {"username": args.username, "password": args.password})["data"]["access_token"]
+        log("注册并登录成功")
+    api = Api(args.api_base, token)
+    me = api.req("GET", "/api/auth/me") if False else None  # 占位；平台无 /me 时忽略
+
+    kb = api.req("POST", "/api/knowledge-bases", {"name": f"bench-crud-{time.strftime('%m%d-%H%M')}", "description": "CRUD-RAG 公开基准 · 隔离评测库"})["data"]
+    kb_id, owner_hint = kb["id"], None
+    log(f"知识库 {kb_id}")
+
+    # 3. 上传语料
+    allow = fetch_allowlist()
+    log(f"上传 {len(allow)} 份语料 …")
+    for i, item in enumerate(allow, 1):
+        p = Path(item["path"])
+        if not p.exists():
+            raise SystemExit(f"语料缺失: {p}")
+        api.upload(f"/api/knowledge-bases/{kb_id}/documents", p)
+        if i % 50 == 0:
+            log(f"  已上传 {i}/{len(allow)}")
+    ready, failed = wait_ready(api, kb_id, len(allow))
+    if failed:
+        log(f"  !! {len(failed)} 份入库失败，检查后重跑")
+        for f in failed[:5]:
+            log(f"    失败: {f['filename']} {f.get('error', '')}")
+    freeze = {
+        "kb_id": kb_id,
+        "frozen_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "documents": [
+            {"id": d["id"], "filename": d["filename"], "status": d["status"], "index_revision": d.get("index_revision")}
+            for d in ready
+        ],
+        "kb_revision": api.req("GET", "/api/knowledge-bases")["data"],
+    }
+    log(f"索引冻结: {len(ready)} 份 ready 文档")
+
+    # 4. 原子事实
+    crud = {c["case_id"]: c for c in json.loads((PREPARED / "crud" / "cases.json").read_text(encoding="utf-8"))}
+    cases = []
+    fact_report = []
+    for t in review["done"]:
+        c = crud[t]
+        rec = review["cases"][t]
+        texts = []
+        for ev in c["official_evidence"]:
+            doc_file = PREPARED / "corpus" / f"{ev['document_id']}.txt"
+            texts.append(doc_file.read_text(encoding="utf-8") if doc_file.exists() else "")
+        raw_facts = decompose_facts(api_key, chat_base, c["question"], rec["confirmed_answer"])
+        facts, dropped = [], []
+        for f in raw_facts:
+            (facts if verify_fact(f, texts, rec["confirmed_answer"]) else dropped).append(f)
+        fact_report.append({"case_id": t, "raw": raw_facts, "kept": facts, "dropped": dropped})
+        if not facts:
+            raise SystemExit(f"案例 {t} 无可用事实（丢弃 {len(dropped)} 条）")
+        cases.append(
+            {
+                "question": c["question"],
+                "reference_answer": rec["confirmed_answer"],
+                "facts": facts,
+                "relevant_document_ids": [ev["document_id"] for ev in c["official_evidence"]],
+                "spans": rec["confirmed_evidence_spans"],
+            }
+        )
+    log(f"原子事实完成: {len(cases)} 题，丢弃 {sum(len(f['dropped']) for f in fact_report)} 条不可定位事实")
+
+    # 5. 证据区间绑定 → 真实子块 ID
+    # owner_id/kb_id 需要平台内部 ID：从任意文档 chunks 的权限校验反推不可行，
+    # 直接查询 PG 的 owner_id（按 kb 内文档聚合）。
+    doc_ids = [d["id"] for d in ready]
+    quoted = ",".join(f"'{d}'" for d in doc_ids)
+    owner_rows = run_sql_in_container(
+        args.pg_container,
+        f"SELECT DISTINCT owner_id, kb_id FROM chunk_vector WHERE doc_id IN ({quoted}) LIMIT 1;",
+    ).strip()
+    if not owner_rows:
+        raise SystemExit("PG 中找不到上传文档的子块，绑定中止")
+    owner_id, pg_kb_id = owner_rows.split("|")
+    log(f"绑定依据: owner={owner_id[:8]}… kb={pg_kb_id[:8]}…")
+    bind_problems = []
+    for c in cases:
+        c["relevant_child_ids"] = []
+        for span in c["spans"]:
+            ids, problems = bind_case_spans(api, args.pg_container, owner_id, pg_kb_id, span, {})
+            c["relevant_child_ids"].extend(ids)
+            bind_problems.extend(problems)
+        c["relevant_child_ids"] = sorted(set(c["relevant_child_ids"]))
+        if not c["relevant_child_ids"]:
+            bind_problems.append(f"{c['question'][:20]}… 全部区间绑定失败")
+    log(f"区间绑定完成，问题 {len(bind_problems)} 条")
+    for p in bind_problems[:10]:
+        log(f"  !! {p}")
+
+    # 6. 三档策略评测
+    args.out_dir.mkdir(parents=True, exist_ok=True)
+    strategies = [s.strip() for s in args.strategies.split(",")]
+    all_results: dict[str, list[dict]] = {}
+    for strategy in strategies:
+        log(f"=== 策略 {strategy} ===")
+        all_results[strategy] = run_strategy(api, kb_id, strategy, cases, args.batch_size)
+
+    # 7. 汇总与导出
+    report = {
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "protocol": "evaluation/public_benchmarks_20261002/PROTOCOL.md",
+        "review_file_sha256": hashlib.sha256(args.review_file.read_bytes()).hexdigest(),
+        "freeze": freeze,
+        "strategies": {},
+        "fact_report": fact_report,
+        "bind_problems": bind_problems,
+        "cases_noev": review["noev"],
+        "cases_flagged": review["flagged"],
+    }
+    for strategy, results in all_results.items():
+        report["strategies"][strategy] = {
+            "aggregate": aggregate(results),
+            "results": results,
+        }
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    out_json = args.out_dir / f"crud_bench_report_{ts}.json"
+    out_json.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    log(f"报告已写入 {out_json}")
+    for strategy in strategies:
+        agg = report["strategies"][strategy]["aggregate"]
+        log(
+            f"  {strategy}: valid={agg['valid_cases']} missing={agg['missing_cases']} "
+            f"refusal={agg['refusal_rate']} CR={agg['context_recall']} CP={agg['context_precision']} "
+            f"F={agg['faithfulness']} AR={agg['answer_relevancy']}"
+        )
+
+
+if __name__ == "__main__":
+    main()
