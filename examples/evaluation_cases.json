@@ -1,0 +1,14 @@
+[
+  {
+    "question": "出差报销申请需要几天内提交？",
+    "reference_answer": "员工出差后必须在7天内提交报销申请。",
+    "reference_facts": ["7天内提交报销申请"],
+    "relevant_document_ids": []
+  },
+  {
+    "question": "住宿报销上限是多少？",
+    "reference_answer": "每晚500元。",
+    "reference_facts": ["住宿报销上限为每晚500元"],
+    "relevant_document_ids": []
+  }
+]

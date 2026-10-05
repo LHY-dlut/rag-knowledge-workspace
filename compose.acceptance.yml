@@ -1,0 +1,8 @@
+# Isolated ports; use a dedicated project name so volumes remain separate.
+services:
+  mysql:
+    ports: ["127.0.0.1:13337:3306"]
+  postgres:
+    ports: ["127.0.0.1:15463:5432"]
+  api:
+    ports: ["127.0.0.1:18125:8000"]

@@ -1,0 +1,18 @@
+# Deploy overlay only: frozen core Compose remains unchanged.
+services:
+  mysql:
+    image: mysql@sha256:6ea90827b1100f8f2ae306a539f86d2c264a26ed435a2a9f75551dd5c3aeb242
+  postgres:
+    image: pgvector/pgvector@sha256:2ba9ca5f2e7daa0f0e7723cba1ee9167bab54efd3640516a44ac1a928dd67e7a
+  migrate:
+    image: zhixu-rag-api:1.81
+    build: {context: ., dockerfile: artifacts/deployment_v1_81/Dockerfile.api.pinned}
+  api:
+    image: zhixu-rag-api:1.81
+    build: {context: ., dockerfile: artifacts/deployment_v1_81/Dockerfile.api.pinned}
+  worker:
+    image: zhixu-rag-api:1.81
+    build: {context: ., dockerfile: artifacts/deployment_v1_81/Dockerfile.api.pinned}
+  frontend:
+    image: zhixu-rag-ui:1.81
+    build: {context: ., dockerfile: artifacts/deployment_v1_81/Dockerfile.ui.pinned}

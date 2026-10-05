@@ -1,0 +1,15 @@
+{
+  "parent_source_verified": true,
+  "changed_existing": [
+    "app/main.py",
+    "app/predicate_reading.py"
+  ],
+  "new_files": [
+    "tests/test_attribution_prefix.py",
+    "docs/attribution_prefix_v81.md"
+  ],
+  "all_semantic_category_role_citation_literal_binding_and_five_veto_code_byte_identical": true,
+  "existing_tests_byte_identical": true,
+  "human5_byte_identical": true,
+  "paid_calls": 0
+}

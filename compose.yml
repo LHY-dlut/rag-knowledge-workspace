@@ -1,0 +1,112 @@
+x-backend: &backend
+  init: true
+  mem_limit: 1g
+  cpus: 1.0
+  pids_limit: 256
+  stop_grace_period: 75s
+  logging: &bounded-logs
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+  build:
+    context: .
+    args:
+      INSTALL_OCR: ${ENABLE_OCR:-false}
+  environment: &backend-env
+    APP_MODE: production
+    MODEL_PROVIDER: ${MODEL_PROVIDER:-demo}
+    JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+    BUSINESS_DB_URL: mysql://rag:${MYSQL_PASSWORD:?Set MYSQL_PASSWORD}@mysql:3306/rag_business
+    VECTOR_DB_URL: postgres://rag:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/rag_vectors
+    DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
+    DASHSCOPE_HTTP_BASE_URL: ${DASHSCOPE_HTTP_BASE_URL:-}
+    DASHSCOPE_CHAT_BASE_URL: ${DASHSCOPE_CHAT_BASE_URL:-}
+    ENABLE_OCR: ${ENABLE_OCR:-false}
+    ENABLE_REGISTRATION: ${ENABLE_REGISTRATION:-false}
+    ENABLE_API_WORKERS: "false"
+    MODEL_CONCURRENCY: ${MODEL_CONCURRENCY:-1}
+    MODEL_DAILY_DISPATCH_LIMIT: ${MODEL_DAILY_DISPATCH_LIMIT:-300}
+    MODEL_MAX_OUTPUT_TOKENS: ${MODEL_MAX_OUTPUT_TOKENS:-2048}
+    WORKER_SHUTDOWN_SECONDS: "60"
+  volumes:
+    # Persist generated artifacts together with uploads for API and both workers.
+    - uploads:/app/data
+
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    mem_limit: 1g
+    cpus: 1.0
+    stop_grace_period: 60s
+    logging: *bounded-logs
+    environment:
+      MYSQL_DATABASE: rag_business
+      MYSQL_USER: rag
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", 'MYSQL_PWD="$${MYSQL_PASSWORD}" mysql --protocol=TCP --host=mysql --user="$${MYSQL_USER}" --database="$${MYSQL_DATABASE}" --execute="SELECT 1" --silent --skip-column-names']
+      interval: 5s
+      timeout: 5s
+      retries: 30
+  postgres:
+    image: pgvector/pgvector:0.8.6-pg18
+    restart: unless-stopped
+    mem_limit: 1g
+    cpus: 1.0
+    stop_grace_period: 60s
+    logging: *bounded-logs
+    environment:
+      POSTGRES_DB: rag_vectors
+      POSTGRES_USER: rag
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", 'PGPASSWORD="$${POSTGRES_PASSWORD}" psql --host=postgres --username="$${POSTGRES_USER}" --dbname="$${POSTGRES_DB}" --command="SELECT 1" --tuples-only --no-align']
+      interval: 5s
+      timeout: 5s
+      retries: 30
+  migrate:
+    <<: *backend
+    command: ["python", "-m", "app.bootstrap"]
+    depends_on:
+      mysql: { condition: service_healthy }
+      postgres: { condition: service_healthy }
+  api:
+    <<: *backend
+    restart: unless-stopped
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/ready', timeout=4)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+  worker:
+    <<: *backend
+    command: ["python", "-m", "app.worker"]
+    restart: unless-stopped
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.operations"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+  frontend:
+    restart: unless-stopped
+    mem_limit: 128m
+    cpus: 0.5
+    logging: *bounded-logs
+    build: { context: ., dockerfile: frontend/Dockerfile }
+    ports: ["127.0.0.1:${RAG_HTTP_PORT:-8080}:80"]
+    depends_on:
+      api: { condition: service_healthy }
+volumes:
+  mysql_data:
+  postgres_data:
+  uploads:

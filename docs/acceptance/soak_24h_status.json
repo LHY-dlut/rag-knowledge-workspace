@@ -1,0 +1,14 @@
+{
+  "status": "passed",
+  "started_at": "2026-10-03T16:32:21.806409+00:00",
+  "planned_hours": 24.0,
+  "provider": "demo",
+  "backend": "real MySQL + PostgreSQL/pgvector",
+  "samples": 1422,
+  "end_to_end": 143,
+  "failures": 0,
+  "elapsed_seconds": 86400.01391460001,
+  "completed": true,
+  "max_observation_gap_seconds": 71.9431466999813,
+  "finished_at": "2026-10-04T16:32:21.820311+00:00"
+}

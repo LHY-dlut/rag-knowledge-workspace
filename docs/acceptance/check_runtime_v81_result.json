@@ -1,0 +1,27 @@
+{
+  "time": "2026-10-05T04:18:58.880701+00:00",
+  "counts": {
+    "local": {
+      "tests": 713,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0
+    },
+    "dual": {
+      "tests": 21,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0
+    }
+  },
+  "provider": "Demo/Mock",
+  "native_image": "zhixu-rag-api:1.81",
+  "python": "3.12.13",
+  "fresh_databases": [
+    "rag_v81_biz_993f8bc5",
+    "rag_v81_vec_993f8bc5"
+  ],
+  "two_migration_passes_no_pending": true,
+  "paid_calls": 0,
+  "original_data_source_soak_and_regression_preserved": true
+}

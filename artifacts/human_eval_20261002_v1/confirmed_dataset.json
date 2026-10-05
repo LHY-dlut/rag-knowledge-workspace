@@ -1,0 +1,115 @@
+{
+  "id": "d31983f7-cd75-4bd6-87fd-f2b9e5ca7208",
+  "status": "human_confirmed",
+  "confirmation": {
+    "reviewer": "user",
+    "confirmed_at": "2026-10-02T14:00:49.281764+08:00",
+    "response_text": "可以确认这批标注。落库时将 A、B 映射到实际子块 ID；②⑤保留空列表，不要为了计算指标补入干扰块。",
+    "confirmed_bundle": {
+      "snapshot_sha256": "10c1c8a9a936faa10e6b434a703528492da4ed90d29bbb05e9e191f4528ae1f9",
+      "dataset_sha256": "b1d266c9a2a398c7cabaf2def8dd44e9d23efd51b702f3defcc66199dce320ea",
+      "plan_sha256": "258993e9e16249dbcd97101bd39372ba8aba33d2dfdaf06fc5c939d35b32087b"
+    },
+    "label_mapping": {
+      "A": "ff0627a7-c7a7-5519-9ade-392525067f1f",
+      "B": "83d1231b-a6a6-5c89-bb33-584cb4c7bf92"
+    },
+    "explicit_empty_cases": [
+      "Q2",
+      "Q5"
+    ]
+  },
+  "cases": [
+    {
+      "question": "员工出差结束后需要在几天内提交报销申请？",
+      "reference_answer": "出差结束后7天内提交报销申请。",
+      "reference_facts": [
+        "员工出差结束后必须在7天内提交报销申请。"
+      ],
+      "answerable": true,
+      "relevant_document_ids": [
+        "23533819-e6a0-43d5-bb3b-264b92835af8"
+      ],
+      "provenance": [
+        {
+          "child_id": "ff0627a7-c7a7-5519-9ade-392525067f1f",
+          "quote": "员工出差结束后必须在7天内提交报销申请。",
+          "snapshot_sha256": "10c1c8a9a936faa10e6b434a703528492da4ed90d29bbb05e9e191f4528ae1f9"
+        }
+      ],
+      "relevant_child_ids": [
+        "ff0627a7-c7a7-5519-9ade-392525067f1f"
+      ],
+      "annotation_method": "human",
+      "history": []
+    },
+    {
+      "question": "木星的直径是多少？",
+      "reference_answer": "所给资料没有木星直径的依据，无法据此回答。",
+      "reference_facts": [],
+      "answerable": false,
+      "relevant_document_ids": [],
+      "provenance": [],
+      "relevant_child_ids": [],
+      "annotation_method": "human",
+      "history": []
+    },
+    {
+      "question": "员工出差报销需要提交哪些材料？",
+      "reference_answer": "发票和审批单。",
+      "reference_facts": [
+        "报销需要提供发票和审批单。"
+      ],
+      "answerable": true,
+      "relevant_document_ids": [
+        "23533819-e6a0-43d5-bb3b-264b92835af8"
+      ],
+      "provenance": [
+        {
+          "child_id": "ff0627a7-c7a7-5519-9ade-392525067f1f",
+          "quote": "报销需要提供发票和审批单。",
+          "snapshot_sha256": "10c1c8a9a936faa10e6b434a703528492da4ed90d29bbb05e9e191f4528ae1f9"
+        }
+      ],
+      "relevant_child_ids": [
+        "ff0627a7-c7a7-5519-9ade-392525067f1f"
+      ],
+      "annotation_method": "human",
+      "history": []
+    },
+    {
+      "question": "设备维修是否也必须在7天内完成？",
+      "reference_answer": "资料未规定设备维修完成时限，不能认定必须在7天内完成。",
+      "reference_facts": [
+        "该制度未规定设备维修完成时限。"
+      ],
+      "answerable": true,
+      "relevant_document_ids": [
+        "3f220ee2-618e-4053-949c-76251f4cb8c2"
+      ],
+      "provenance": [
+        {
+          "child_id": "83d1231b-a6a6-5c89-bb33-584cb4c7bf92",
+          "quote": "该制度未规定设备维修完成时限。",
+          "snapshot_sha256": "10c1c8a9a936faa10e6b434a703528492da4ed90d29bbb05e9e191f4528ae1f9"
+        }
+      ],
+      "relevant_child_ids": [
+        "83d1231b-a6a6-5c89-bb33-584cb4c7bf92"
+      ],
+      "annotation_method": "human",
+      "history": []
+    },
+    {
+      "question": "员工提交发票和审批单后，能否保证报销款次日到账？",
+      "reference_answer": "资料只列出报销材料，没有付款时限依据，不能保证次日到账。",
+      "reference_facts": [],
+      "answerable": false,
+      "relevant_document_ids": [],
+      "provenance": [],
+      "relevant_child_ids": [],
+      "annotation_method": "human",
+      "history": []
+    }
+  ]
+}

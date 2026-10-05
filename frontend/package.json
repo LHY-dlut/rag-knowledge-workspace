@@ -1,0 +1,9 @@
+{
+  "name": "rag-reproduction-ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {"dev": "vite --host 127.0.0.1", "build": "vite build", "test": "node --test tests/*.test.js"},
+  "dependencies": {"vue": "3.5.43", "element-plus": "2.14.7", "echarts": "6.1.0"},
+  "devDependencies": {"vite": "8.3.1", "@vitejs/plugin-vue": "6.0.9"}
+}

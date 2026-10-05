@@ -1,0 +1,6 @@
+# Optional for a busy local Docker Engine; select a verified unused /24 subnet.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${RAG_DOCKER_SUBNET:?Set an unused private subnet via -NetworkSubnet}
