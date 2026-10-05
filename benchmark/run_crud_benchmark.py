@@ -305,38 +305,65 @@ def put_config(api: Api, kb_id: str, strategy: str) -> None:
     log(f"  策略 {strategy} 配置已生效: {json.dumps({k: resp['data'][k] for k in ('hybrid', 'rerank')}, ensure_ascii=False)}")
 
 
-def run_strategy(api: Api, kb_id: str, strategy: str, cases: list[dict], batch: int) -> list[dict]:
-    put_config(api, kb_id, strategy)
-    results, run_ids = [], []
-    for i in range(0, len(cases), batch):
-        chunk = cases[i : i + batch]
-        body = {
-            "kb_id": kb_id,
-            "cases": [
-                {
-                    "question": c["question"],
-                    "reference_answer": c["reference_answer"],
-                    "reference_facts": c["facts"],
-                    "answerable": True,
-                    "relevant_document_ids": c["relevant_document_ids"],
-                    "relevant_child_ids": c["relevant_child_ids"] or None,
-                    "annotation_method": "human",
-                }
-                for c in chunk
-            ],
+def build_case_payload(chunk: list[dict]) -> list[dict]:
+    return [
+        {
+            "question": c["question"],
+            "reference_answer": c["reference_answer"],
+            "reference_facts": c["facts"],
+            "answerable": True,
+            "relevant_document_ids": c["relevant_document_ids"],
+            "relevant_child_ids": c["relevant_child_ids"] or None,
+            "annotation_method": "human",
         }
-        log(f"  策略 {strategy}: 提交 {len(chunk)} 题")
+        for c in chunk
+    ]
+
+
+def submit_and_collect(api: Api, kb_id: str, strategy: str, chunk: list[dict]) -> list[dict]:
+    """提交一个批次并取回结果；失败返回空列表由上层重试。"""
+    body = {
+        "kb_id": kb_id,
+        # 协议要求三档统一 rag 模式，隔离检索策略差异（关闭 agent 循环）
+        "mode": "rag",
+        "cases": build_case_payload(chunk),
+    }
+    try:
         resp = api.req("POST", "/api/evaluations", body, timeout=300)
-        run_ids.append(resp["data"]["id"])
-    for rid in run_ids:
-        status = "running"
-        while status not in ("completed", "partial_missing", "failed"):
-            time.sleep(5)
-            item = api.req("GET", f"/api/evaluations/{rid}")["data"]
-            status = item.get("status") or (item.get("metrics") and "completed")
-        item = api.req("GET", f"/api/evaluations/{rid}")["data"]
-        results.extend(item.get("results", []))
-        log(f"  run {rid[:8]} → {status}, 有效题 {sum(1 for r in item.get('results', []) if r['status'] == 'passed')}")
+    except Exception as exc:  # noqa: BLE001
+        log(f"  [{strategy}] 批次提交失败（{type(exc).__name__}），将在单题模式重试")
+        return []
+    rid = resp["data"]["id"]
+    # 服务端同步执行，POST 返回时已结束；再取一次拿到完整结果
+    item = api.req("GET", f"/api/evaluations/{rid}")["data"]
+    status = item.get("status")
+    results = item.get("results", [])
+    log(f"  [{strategy}] run {rid[:8]} → {status}, 题数 {len(results)}")
+    return results if status in ("completed", "partial_missing") else []
+
+
+def run_strategy(
+    api: Api, kb_id: str, strategy: str, cases: list[dict], batch: int, parallel: int
+) -> list[dict]:
+    put_config(api, kb_id, strategy)
+    batches = [cases[i : i + batch] for i in range(0, len(cases), batch)]
+    log(f"  策略 {strategy}: {len(cases)} 题 / {len(batches)} 批（批={batch}，并行={parallel}）")
+    results: list[dict] = []
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=max(1, parallel)) as pool:
+        futures = [pool.submit(submit_and_collect, api, kb_id, strategy, b) for b in batches]
+        for idx, (b, fut) in enumerate(zip(batches, futures), 1):
+            got = fut.result()
+            if not got:
+                # 批次整体失败：退回单题重试，避免整批丢失
+                log(f"  批次 {idx}/{len(batches)} 失败，单题重试 {len(b)} 题")
+                for c in b:
+                    got.extend(submit_and_collect(api, kb_id, strategy, [c]))
+                results.extend(got)
+                continue
+            results.extend(got)
+            log(f"  进度 {idx}/{len(batches)} 批，累计 {len(results)} 题")
     return results
 
 
@@ -365,7 +392,8 @@ def main() -> None:
     parser.add_argument("--pg-container", default="zhixu-rag-v81-postgres-1")
     parser.add_argument("--out-dir", type=Path, default=Path(__file__).resolve().parent / "out")
     parser.add_argument("--strategies", default="dense,hybrid,full")
-    parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--parallel", type=int, default=4, help="并行批次数；受平台 MODEL_CONCURRENCY 约束")
+    parser.add_argument("--batch-size", type=int, default=1, help="每批题数；服务端单请求 300s 超时、单题约 100s，默认 1 最稳，失败仅损失该题")
     parser.add_argument("--check-only", action="store_true", help="只校验人工确认文件，不调用任何服务")
     parser.add_argument("--allow-excluded", action="store_true", help="确认排除被标记为 noev/flag 的验收题（需在报告中如实记录）")
     parser.add_argument("--kb-id", help="复用已入库的评测知识库（跳过上传，校验 ready 后直接评测）")
@@ -493,7 +521,8 @@ def main() -> None:
                 "question": c["question"],
                 "reference_answer": rec["confirmed_answer"],
                 "facts": facts,
-                "relevant_document_ids": [ev["document_id"] for ev in c["official_evidence"]],
+                # 先记外部语料 ID，绑定阶段统一映射为平台文档 UUID 后再送入评测
+                "external_document_ids": [ev["document_id"] for ev in c["official_evidence"]],
                 "spans": rec["confirmed_evidence_spans"],
             }
         )
@@ -516,6 +545,13 @@ def main() -> None:
     ext_to_platform = {Path(d["filename"]).stem: d["id"] for d in ready}
     bind_problems = []
     for c in cases:
+        # 相关文档 ID 必须用平台 UUID，否则 document_recall 恒为 0
+        c["relevant_document_ids"] = [
+            ext_to_platform[e] for e in c["external_document_ids"] if e in ext_to_platform
+        ]
+        missing_docs = [e for e in c["external_document_ids"] if e not in ext_to_platform]
+        if missing_docs:
+            bind_problems.append(f"{c['question'][:20]}… 相关文档不在 ready 集合: {missing_docs[:2]}")
         c["relevant_child_ids"] = []
         for span in c["spans"]:
             platform_doc = ext_to_platform.get(span["document_id"])
@@ -539,16 +575,35 @@ def main() -> None:
     all_results: dict[str, list[dict]] = {}
     for strategy in strategies:
         log(f"=== 策略 {strategy} ===")
-        all_results[strategy] = run_strategy(api, kb_id, strategy, cases, args.batch_size)
+        all_results[strategy] = run_strategy(api, kb_id, strategy, cases, args.batch_size, args.parallel)
 
     # 7. 汇总与导出
     report = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "protocol": "evaluation/public_benchmarks_20261002/PROTOCOL.md",
+        "platform": {
+            "image": "zhixu-rag-api:1.81",
+            "patch": "评测接口新增可选 mode 字段（默认 agent 保持原行为），协议要求三档统一 mode=rag 隔离检索策略差异",
+            "model_concurrency": 4,
+            "daily_dispatch_limit": 3000,
+        },
+        "run_config": {
+            "batch_size": args.batch_size,
+            "parallel": args.parallel,
+            "strategies": strategies,
+        },
         "review_file_sha256": hashlib.sha256(args.review_file.read_bytes()).hexdigest(),
         "freeze": freeze,
         "strategies": {},
         "fact_report": fact_report,
+        "case_document_map": {
+            c["question"]: {
+                "external_document_ids": c["external_document_ids"],
+                "platform_document_ids": c["relevant_document_ids"],
+                "relevant_child_ids": c["relevant_child_ids"],
+            }
+            for c in cases
+        },
         "bind_problems": bind_problems,
         "cases_noev": review["noev"],
         "cases_flagged": review["flagged"],
