@@ -40,10 +40,17 @@
     "content": "12 例原批次协议失败题（真实百炼模型、冻结索引、同输入）复现：协议错误 6 → 1；其中 5 例片段覆盖错误全部消除（2 例转通过、3 例转正常语义否决）",
     "scope": "逐题复现，不是三档总体成绩；整轮基准尚未重跑"
   },
+  "benchmark_retest": {
+    "date": "2026-10-06/07",
+    "tiers": "dense / hybrid / full 各重跑一次，与 10-05 基线按题配对比较",
+    "paired_refusal_delta": "-4.35 / -6.52 / -4.17 pt（基线 0.7609 / 0.7391 / 0.7917）",
+    "dispatches": 3714,
+    "report": "benchmark/results_crud_v82_comparison.md",
+    "caveat": "单次运行、每档 1-4 道翻转、未做显著性检验；拒答率仍 67%-75%，grade 判证据不足未改动"
+  },
   "not_executed_this_round": [
     "真实双库回归（21 项集成用例）",
     "新版本百炼页面验收",
-    "整轮 CRUD-RAG 三档重跑",
     "24 小时长稳（沿用 2026-10-03→04 的 v1.81 结果，v1.82 未重跑）",
     "scope_no_upgrade_relaxation 开关的单独实测"
   ]
