@@ -43,6 +43,9 @@ class RetrievalConfig(StrictModel):
     child_overlap: int = Field(0, ge=0, le=200)
     grade_retry_limit: int = Field(3, ge=0, le=3)
     check_retry_limit: int = Field(2, ge=0, le=2)
+    # 整链兜底：逐调用重试（protocol_retry_limit）之后仍协议失败时，
+    # 对同一份未改动草稿再跑整条核验链的次数。
+    check_protocol_retry_limit: int = Field(1, ge=0, le=3)
 
     @model_validator(mode="after")
     def validate_chunk_sizes(self):
@@ -151,14 +154,36 @@ class CheckAnswerProjection(StrictModel):
             raise ValueError("Independent answer projection tags must be unique")
         return self
 
-    def matches_source(self, projection: "CheckScopeProjection") -> tuple[bool, bool]:
+    def matches_source(
+        self, projection: "CheckScopeProjection", no_upgrade: bool = False
+    ) -> tuple[bool, bool]:
         modes = "undetermined" not in self.modes + projection.source_modes and set(
             self.modes
         ) == set(projection.source_modes)
         voices = "undetermined" not in self.voices + projection.source_voices and set(
             self.voices
         ) == set(projection.source_voices)
+        if no_upgrade:
+            modes = modes or _no_upgrade_preserved(self.modes, projection.source_modes)
+            voices = voices or _no_upgrade_preserved(self.voices, projection.source_voices)
         return modes, voices
+
+
+def _no_upgrade_preserved(answer_values: list[str], source_values: list[str]) -> bool:
+    """答案不得比原文更绝对（只在显式启用时使用）。
+
+    原判定要求答案与原文的类别集合完全相等。但设计意图是防止把预测/建议
+    升级成已实现的事实；答案复述为同样谨慎的语气（甚至更保守）不应被拒。
+    因此：原文非"断定/事实"时，答案出现"断定/事实"才算升级并拒绝；
+    原文本身是断定/事实时，答案更保守视为通过。待定仍按原严格规则处理。
+    """
+    if "undetermined" in answer_values or "undetermined" in source_values:
+        return False
+    if set(answer_values) == set(source_values):
+        return True
+    if "asserted" in answer_values and "asserted" not in source_values:
+        return False
+    return not ("fact" in answer_values and "fact" not in source_values)
 
 
 class CheckScopeProjection(StrictModel):
@@ -543,6 +568,9 @@ class EvaluationCase(StrictModel):
 class EvaluationRequest(StrictModel):
     kb_id: str
     cases: list[EvaluationCase] = Field(min_length=1, max_length=50)
+    # rag：单轮检索+生成核验，用于隔离检索策略差异；
+    # agent：允许受限循环与工具路由（默认，保持既有行为）。
+    mode: Literal["rag", "agent"] = "agent"
 
 
 class PromptEdit(StrictModel):

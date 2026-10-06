@@ -54,6 +54,7 @@ class GraphState(TypedDict, total=False):
     tool_arguments: dict[str, Any]
     grade_retries: int
     check_retries: int
+    check_protocol_retries: int
     generation_attempt: int
     retrieval: RetrievalResult
     grade: GradeDecision
@@ -66,6 +67,7 @@ class GraphState(TypedDict, total=False):
     step_ordinal: int
     grade_retry_allowed: bool
     check_retry_allowed: bool
+    check_protocol_retry_allowed: bool
     application_prompt: str
     fallback_answer: str
     grade_protocol: dict
@@ -152,6 +154,7 @@ class RAGAgent:
                 "query": state.get("standalone_query", state["query"]),
                 "grade_retries": state.get("grade_retries", 0),
                 "check_retries": state.get("check_retries", 0),
+                "check_protocol_retries": state.get("check_protocol_retries", 0),
             }
             step = await AgentStep.create(
                 run_id=state["run_id"],
@@ -471,23 +474,39 @@ class RAGAgent:
                     protocol["scope_review"] = scope_review
             except CheckProtocolError:
                 # An invalid check is neither evidence nor permission to publish.
-                # Reuse the bounded failed-check edge; network/budget failures
-                # remain ProviderError and keep their existing terminal handling.
-                judgment = Judgment(
-                    passed=False,
-                    reason="核验结构无效，草稿不可发布；重新生成有明确出处的事实陈述后再核验。",
-                )
+                # It is also not evidence against the draft: a protocol failure
+                # says nothing about support, so the unchanged draft is verified
+                # again instead of being replaced or rejected. Network/budget
+                # failures remain ProviderError and keep their terminal handling.
+                limit = RetrievalConfig.model_validate(
+                    state["kb"].config
+                ).check_protocol_retry_limit
+                attempted = state.get("check_protocol_retries", 0)
+                allowed = attempted < limit
                 protocol["check_response"] = {
                     "passed": False,
                     "failure_type": "check_response_schema_invalid",
                     "error_type": "CheckProtocolError",
+                    "attempts": attempted + 1,
+                    "protocol_retry_allowed": allowed,
                 }
+                if allowed:
+                    return {
+                        "citation_protocol": protocol,
+                        "check_protocol_retries": attempted + 1,
+                        "check_protocol_retry_allowed": True,
+                    }
+                judgment = Judgment(
+                    passed=False,
+                    reason="核验结构无效，草稿不可发布；重新生成有明确出处的事实陈述后再核验。",
+                )
         if judgment.passed:
             return {
                 "check": judgment,
                 "answer": rendered,
                 "draft": rendered,
                 "citation_protocol": protocol,
+                "check_protocol_retry_allowed": False,
                 "rejected": False,
             }
         if protocol["passed"]:
@@ -506,13 +525,19 @@ class RAGAgent:
             "citation_protocol": protocol,
             "check_retries": state.get("check_retries", 0) + int(allowed),
             "check_retry_allowed": allowed,
+            "check_protocol_retry_allowed": False,
             "feedback": check_retry_feedback(judgment),
             "draft": "",
         }
 
     def _after_check(self, state: GraphState):
-        if state["check"].passed:
+        check = state.get("check")
+        if check is not None and check.passed:
             return END
+        if state.get("check_protocol_retry_allowed"):
+            # Re-verify the same untouched draft; never regenerate for a
+            # protocol failure, which is not a verdict about support.
+            return "check"
         return "generate" if state["check_retry_allowed"] else "fallback"
 
     async def fallback(self, state: GraphState):

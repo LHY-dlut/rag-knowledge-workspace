@@ -686,6 +686,7 @@ def create_app(settings: Settings | None = None, *, start_worker: bool | None = 
                     request.app.state.agent,
                     request.app.state.provider,
                     evaluation,
+                    mode=body.mode,
                 )
         except BaseException:
             await EvaluationRun.filter(id=evaluation.id).update(

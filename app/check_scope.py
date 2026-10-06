@@ -146,7 +146,12 @@ async def validate_check_scope(provider, judgment, answer: str, sources: list[di
         if independent is not None:
             if claim.projection is None:
                 raise CheckProtocolError("独立答案投影核对缺少来源投影")
-            modes, voices = independent.matches_source(claim.projection)
+            modes, voices = independent.matches_source(
+                claim.projection,
+                no_upgrade=getattr(
+                    getattr(provider, "settings", None), "scope_no_upgrade_relaxation", False
+                ),
+            )
             claim = claim.model_copy(
                 update={
                     "modality_preserved": claim.modality_preserved and modes,

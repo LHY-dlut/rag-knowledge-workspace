@@ -6,6 +6,24 @@ from app.providers import CheckProtocolError
 from app.schemas import AnswerRangePredicates
 
 
+class FragmentCoverageError(CheckProtocolError):
+    """模型漏选实质片段。携带缺失清单供定向重问，绝不自动补全或改判类别。"""
+
+    def __init__(self, missing: list[dict]):
+        super().__init__("逐谓词片段选择遗漏答案内容或范围限定")
+        self.missing = missing
+
+    @property
+    def correction(self) -> str:
+        listed = "；".join(f"{m['fragment_id']}「{m['quote']}」" for m in self.missing[:12])
+        return (
+            " 上一次回复遗漏了以下必须归属的实质片段，必须把每一个都放进某个谓词的 "
+            "fragment_ids（可以与相邻部分同属一个谓词，仍按原文顺序）："
+            + listed
+            + "。不得新增、改写、重排或合并片段，也不得因为只关注其中一个关系而省略其余部分。"
+        )
+
+
 def required_fragment_ids(fragments: list[dict], answer: str) -> list[str]:
     markers, _ = citation_scopes(answer)
     return [
@@ -61,7 +79,13 @@ def bind_answer_parts(decision: AnswerRangePredicates, focus: dict, answer: str)
             }
         )
     if covered != required:
-        raise CheckProtocolError("逐谓词片段选择遗漏答案内容或范围限定")
+        raise FragmentCoverageError(
+            [
+                {"fragment_id": part["fragment_id"], "quote": part["quote"]}
+                for part in fragments
+                if part["fragment_id"] in required - covered
+            ]
+        )
     return rows
 
 

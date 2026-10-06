@@ -2,6 +2,7 @@
 
 from types import SimpleNamespace
 
+from app.answer_parts import FragmentCoverageError
 from app.check_protocol import citation_scopes
 from app.evidence_protocol import evidence_spans, match_evidence
 from app.providers import CheckProtocolError
@@ -15,6 +16,30 @@ PREDICATES = (
     "conditions_preserved",
     "attribution_preserved",
 )
+
+
+async def project_parts(provider, schema, task: str, payload: dict, bind):
+    """逐谓词片段投影；模型漏选实质片段时按缺失清单定向重问。
+
+    只重述被漏掉的真实片段并要求重新归类；不替模型补全、不改写类别、
+    不放宽覆盖要求。重问次数用尽后仍按原样抛出，由上层决定是否拒答。
+    """
+    limit = getattr(getattr(provider, "settings", None), "part_coverage_retry_limit", 0)
+    correction = ""
+    for attempt in range(limit + 1):
+        # 首次保持原样调用；只有确实查到漏选片段时才带上纠正指令重问。
+        decision = (
+            await provider.structured(schema, task, payload, correction=correction)
+            if correction
+            else await provider.structured(schema, task, payload)
+        )
+        try:
+            return decision, bind(decision)
+        except FragmentCoverageError as exc:
+            if attempt >= limit:
+                raise
+            correction = exc.correction
+    raise AssertionError("不可达：循环内必然返回或抛出")
 
 
 def bind_answer_predicates(decision: AnswerPredicates, focus: dict, answer: str) -> list[dict]:
@@ -109,10 +134,13 @@ async def review_atomic_scope(
                 "focus_answer_span": focus,
                 **payload,
             }
-        independent = await provider.structured(
-            AnswerRangePredicates, "check_answer_predicate_parts", payload
+        independent, atoms = await project_parts(
+            provider,
+            AnswerRangePredicates,
+            "check_answer_predicate_parts",
+            payload,
+            lambda decision: bind_answer_parts(decision, focus, answer),
         )
-        atoms = bind_answer_parts(independent, focus, answer)
     elif getattr(provider, "supports_check_predicate_ranges", False):
         from app.answer_ranges import answer_fragments, bind_answer_ranges
 
@@ -207,10 +235,13 @@ async def review_atomic_scope(
                     "focus_source_span": registered,
                     "source_fragments": answer_fragments(registered, source["content"]),
                 }
-                projected = await provider.structured(
-                    SourcePredicateParts, "check_source_predicate_parts", source_payload_independent
+                _, cache[key] = await project_parts(
+                    provider,
+                    SourcePredicateParts,
+                    "check_source_predicate_parts",
+                    source_payload_independent,
+                    lambda decision: bind_source_parts(decision, source, registered),
                 )
-                cache[key] = bind_source_parts(projected, source, registered)
                 source_calls += 1
             source_atoms.extend(cache[key])
         source_atoms = list({p["source_predicate_id"]: p for p in source_atoms}.values())
@@ -301,16 +332,19 @@ async def review_atomic_scope(
                 raise CheckProtocolError("逐谓词范围核验原文位置不存在")
             bindings.append(bound)
             verified_sources.add(ref.source_id)
+        no_upgrade = getattr(
+            getattr(provider, "settings", None), "scope_no_upgrade_relaxation", False
+        )
         flags = {name: getattr(claim, name) == "preserved" for name in PREDICATES}
         modes = (
             atom["mode"] != "undetermined"
             and claim.source_mode != "undetermined"
-            and atom["mode"] == claim.source_mode
+            and (atom["mode"] == claim.source_mode or (no_upgrade and atom["mode"] != "asserted"))
         )
         voices = (
             atom["voice"] != "undetermined"
             and claim.source_voice != "undetermined"
-            and atom["voice"] == claim.source_voice
+            and (atom["voice"] == claim.source_voice or (no_upgrade and atom["voice"] != "fact"))
         )
         flags["modality_preserved"] = flags["modality_preserved"] and modes
         flags["attribution_preserved"] = flags["attribution_preserved"] and voices

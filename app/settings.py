@@ -27,6 +27,13 @@ class Settings(BaseSettings):
     model_max_request_bytes: int = Field(100_000, ge=1000, le=1_000_000)
     model_max_output_tokens: int = Field(2048, ge=256, le=8192)
     check_source_window_projection: bool = False
+    # 严格协议（check/grade）的结构校验失败重试次数；0 表示不重试（原行为）
+    protocol_retry_limit: int = Field(2, ge=0, le=3)
+    # 逐谓词片段投影漏选实质片段时，按缺失清单定向重问的次数；0 表示不重问
+    part_coverage_retry_limit: int = Field(1, ge=0, le=2)
+    # 范围核验：允许答案语气/归属比原文更保守（禁止升级为断定/事实）。
+    # False 保持原有的"类别集合必须完全相等"严格规则。
+    scope_no_upgrade_relaxation: bool = False
     upload_dir: Path = Path("data/uploads")
     upload_max_bytes: int = Field(20 * 1024 * 1024, ge=1)
     parsed_max_chars: int = Field(2_000_000, ge=1000)
