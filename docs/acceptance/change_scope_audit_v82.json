@@ -1,0 +1,44 @@
+{
+  "parent_commit": "34694cd",
+  "commit": "f63fdd1",
+  "changed_existing": [
+    "app/agent.py",
+    "app/answer_parts.py",
+    "app/atomic_scope.py",
+    "app/check_scope.py",
+    "app/main.py",
+    "app/providers.py",
+    "app/schemas.py",
+    "app/settings.py"
+  ],
+  "new_files": [
+    "docs/check_protocol_retry_v82.md",
+    "tests/test_part_coverage_retry.py",
+    "tests/test_protocol_retry_and_no_upgrade.py"
+  ],
+  "default_behavior_changed": true,
+  "default_behavior_note": "新增三个上限默认非 0（protocol_retry_limit=2、part_coverage_retry_limit=1、check_protocol_retry_limit=1），默认即改变核验链行为；显式全部置 0 才回到 v1.81 行为。这一点与 v81 审计不同：v81 默认保持原行为，v82 默认即生效。",
+  "retry_scope": "逐调用结构重试仅在 providers.structured 中对 check* / grade 任务生效；其它任务的解析失败仍按原行为抛出 ProviderError，不重试。",
+  "retry_changes_instructions_only": true,
+  "retry_note": "生成温度固定为 0，相同提示词必然复现同一次失败，因此重试一律在系统提示末尾追加纠正说明，不重复同一请求。",
+  "base_prompts_unchanged": true,
+  "coverage_conjunction_enum_and_position_rules_unchanged": true,
+  "semantic_veto_unchanged": true,
+  "semantic_veto_note": "passed=False 的真实判据仍直接否决，不自动改判；未核验不得发布的不变量保留，每次尝试都必须完整通过引用预检、语义核验与范围核验。",
+  "scope_no_upgrade_relaxation_default": false,
+  "scope_no_upgrade_relaxation_note": "默认关闭，保持原有类别集合必须完全相等的严格规则；启用后的收益尚未单独实测。",
+  "grade_judgement_unchanged": true,
+  "grade_retry_note": "grade 的判定与提示词未改动，但新增的逐调用重试对 grade 同样生效。",
+  "retrieval_unchanged": true,
+  "evaluation_scoring_unchanged": true,
+  "new_mode_field": {
+    "field": "EvaluationRequest.mode",
+    "default": "agent",
+    "default_preserves_behavior": true,
+    "files": ["app/schemas.py", "app/main.py"],
+    "main_py_diff_lines": 3
+  },
+  "human5_byte_identical": true,
+  "human5_path": "artifacts/human_eval_20261002_v1/confirmed_dataset.json",
+  "paid_calls": 0
+}

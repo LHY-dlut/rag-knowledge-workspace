@@ -64,7 +64,7 @@ ID 与原文，而不是只给一句"遗漏答案内容"。`atomic_scope.project
 （2 例转为通过、3 例转为正常语义否决）；余下 1 例是另一种失败
 （该投影返回不合严格 schema），本轮未处理。
 
-**本地测试** 725 项通过、18 项跳过；`ruff check` 与格式检查通过。
+**本地测试** 727 项通过、21 项跳过（2026-10-06 复跑，`python -m pytest -q`；跳过的是需要真实双库与隔离标志的集成用例，不计入通过）；`ruff check` 与 `ruff format --check` 在 `app scripts tests` 范围内通过。本轮未重跑真实双库、页面验收与 24 小时长稳。
 `tests/test_part_coverage_retry.py` 覆盖缺失清单与纠正文案、定向重问后补全、
 次数用尽仍失败、以及 0 次时不重问；`tests/test_protocol_retry_and_no_upgrade.py`
 覆盖逐调用重试与"不得升级"判定；`tests/test_check_protocol_recovery.py`
