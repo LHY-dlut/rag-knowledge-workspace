@@ -19,6 +19,10 @@ const { chromium: playwright } = require(process.env.PLAYWRIGHT_MODULE || 'playw
   const page = await context.newPage();
   const errors = [];
   const output = process.env.UI_ARTIFACT_DIR || 'artifacts';
+  // 演示模型响应是即时的；真实百炼单题实测 60–190 秒，硬编码 15 秒必然超时。
+  // 默认保持原值以不改变既有验收口径，真实模型联调时用 UI_TIMEOUT_MS 调大。
+  const T = Number(process.env.UI_TIMEOUT_MS || 15000);
+  const T_LONG = Number(process.env.UI_TIMEOUT_MS || 20000);
   page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
   page.on('pageerror', e => errors.push(e.message));
   try {
@@ -32,13 +36,13 @@ const { chromium: playwright } = require(process.env.PLAYWRIGHT_MODULE || 'playw
     const nav = name => page.locator('nav button').filter({ hasText: name }).click();
     await nav('文档与片段');
     await page.getByRole('button', { name: '载入示例', exact: true }).click();
-    await page.getByText('ready', { exact: true }).waitFor({ timeout: 15000 });
+    await page.getByText('ready', { exact: true }).waitFor({ timeout: T });
     fs.mkdirSync(output, { recursive: true });
     await page.screenshot({ path: path.join(output, 'ui_documents.png'), fullPage: true });
     await nav('知识问答');
     await page.getByRole('button', { name: '出差报销申请需要几天内提交？ ↗', exact: true }).click();
     await page.getByRole('button', { name: '发送 ↗', exact: true }).click();
-    await page.locator('.message.assistant .answer-text').filter({ hasText: '7天' }).waitFor({ timeout: 15000 });
+    await page.locator('.message.assistant .answer-text').filter({ hasText: '7天' }).waitFor({ timeout: T });
     await page.getByRole('button', { name: '发送 ↗', exact: true }).waitFor();
     await page.screenshot({ path: path.join(output, 'ui_chat.png'), fullPage: true });
     // Real browser refresh retains tab login and accepted history.
@@ -58,8 +62,8 @@ const { chromium: playwright } = require(process.env.PLAYWRIGHT_MODULE || 'playw
     await page.getByRole('button', { name: '发送 ↗', exact: true }).click();
     await page.locator('.draft-box').waitFor();
     await page.reload();
-    await page.getByRole('button', { name: '停止生成', exact: true }).waitFor({ timeout: 15000 });
-    await page.getByRole('button', { name: '停止生成', exact: true }).waitFor({ state: 'hidden', timeout: 15000 });
+    await page.getByRole('button', { name: '停止生成', exact: true }).waitFor({ timeout: T });
+    await page.getByRole('button', { name: '停止生成', exact: true }).waitFor({ state: 'hidden', timeout: T });
     await page.getByRole('button', { name: '发送 ↗', exact: true }).waitFor();
     assert.ok((await page.locator('.message.assistant .answer-text').last().textContent()).includes('7天'));
     assert.equal(await page.locator('.step .running').count(), 0);
@@ -74,7 +78,7 @@ const { chromium: playwright } = require(process.env.PLAYWRIGHT_MODULE || 'playw
     assert.equal(await page.getByRole('switch').count(), 7);
     await nav('质量评测');
     await page.getByRole('button', { name: '运行评测', exact: true }).click();
-    await page.getByRole('heading', { name: '质量指标', exact: true }).waitFor({ timeout: 20000 });
+    await page.getByRole('heading', { name: '质量指标', exact: true }).waitFor({ timeout: T_LONG });
     await page.locator('.metric-chart canvas').waitFor();
     await page.screenshot({ path: path.join(output, 'ui_evaluation.png'), fullPage: true });
     // Explicitly mocked UI failure payload; backend Judge failure has separate pytest coverage.
@@ -91,10 +95,10 @@ const { chromium: playwright } = require(process.env.PLAYWRIGHT_MODULE || 'playw
     await page.unroute('**/api/evaluations');
 
     await page.getByRole('button', { name: '三档策略对比', exact: true }).click();
-    await page.getByRole('heading', { name: '三档策略对比', exact: true }).waitFor({ timeout: 20000 });
+    await page.getByRole('heading', { name: '三档策略对比', exact: true }).waitFor({ timeout: T_LONG });
     await page.screenshot({ path: path.join(output, 'ui_comparison.png'), fullPage: true });
     await page.getByRole('button', { name: '从文档生成 5 条', exact: true }).click();
-    await page.getByRole('button').filter({ hasText: 'document_generated' }).waitFor({ timeout: 20000 });
+    await page.getByRole('button').filter({ hasText: 'document_generated' }).waitFor({ timeout: T_LONG });
     await nav('应用管理');
     await page.getByRole('button', { name: '创建应用', exact: true }).click();
     await page.getByPlaceholder('应用名称', { exact: true }).fill('制度客服');
@@ -106,7 +110,7 @@ const { chromium: playwright } = require(process.env.PLAYWRIGHT_MODULE || 'playw
     await page.getByRole('option', { name: '制度客服', exact: true }).click();
     await page.getByRole('button', { name: '出差报销申请需要几天内提交？ ↗', exact: true }).click();
     await page.getByRole('button', { name: '发送 ↗', exact: true }).click();
-    await page.getByRole('button', { name: '有帮助', exact: true }).waitFor({ timeout: 15000 });
+    await page.getByRole('button', { name: '有帮助', exact: true }).waitFor({ timeout: T });
     await page.getByRole('button', { name: '没有帮助', exact: true }).click();
     await nav('对话反馈');
     await page.getByRole('button', { name: '订正为测评样本', exact: true }).click();
@@ -117,13 +121,13 @@ const { chromium: playwright } = require(process.env.PLAYWRIGHT_MODULE || 'playw
     await page.screenshot({ path: path.join(output, 'ui_feedback.png'), fullPage: true });
     await nav('模型配置');
     await page.getByRole('button', { name: '测试三类模型', exact: true }).click();
-    await page.getByText(/embedding_dimensions/).waitFor({ timeout: 15000 });
+    await page.getByText(/embedding_dimensions/).waitFor({ timeout: T });
     await nav('文档与片段');
     const readyRevision = page.waitForResponse(async response => {
       if (!response.url().endsWith('/documents') || response.status() !== 200) return false;
       const body = await response.json();
       return body.data.some(d => d.status === 'ready' && d.index_revision === 2);
-    }, { timeout: 20000 });
+    }, { timeout: T_LONG });
     const [chooser] = await Promise.all([page.waitForEvent('filechooser'),
       page.getByRole('button', { name: '覆盖文件', exact: true }).click()]);
     await chooser.setFiles({ name: '新版制度.md', mimeType: 'text/markdown',
