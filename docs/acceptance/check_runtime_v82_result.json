@@ -10,11 +10,15 @@
       "skipped": 21
     },
     "dual": {
-      "tests": 0,
+      "tests": 21,
       "errors": 0,
       "failures": 0,
       "skipped": 0,
-      "status": "not_run"
+      "status": "passed",
+      "run_at": "2026-10-07",
+      "command": "pytest -q -rs -m integration（TEST_BUSINESS_DB_URL / TEST_VECTOR_DB_URL / ACCEPTANCE_ISOLATED_DATABASES=1，独立空库）",
+      "fresh_databases": ["rag_v83_biz_de84b964", "rag_v83_vec_de84b964"],
+      "two_migration_passes_no_pending": true
     }
   },
   "command": "python -m pytest -q --basetemp=<仓库内绝对路径>/.acceptance/tmp/v82c",
@@ -49,9 +53,8 @@
     "caveat": "单次运行、每档 1-4 道翻转、未做显著性检验；拒答率仍 67%-75%，grade 判证据不足未改动"
   },
   "not_executed_this_round": [
-    "真实双库回归（21 项集成用例）",
     "新版本百炼页面验收",
-    "24 小时长稳（沿用 2026-10-03→04 的 v1.81 结果，v1.82 未重跑）",
+    "24 小时长稳（沿用 2026-10-03→04 的 v1.81 结果，v1.82/v1.83 未重跑）",
     "scope_no_upgrade_relaxation 开关的单独实测"
   ]
 }
