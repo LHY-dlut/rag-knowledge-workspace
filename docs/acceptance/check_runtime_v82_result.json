@@ -26,13 +26,13 @@
   "local_skipped_reason": "21 项集成用例经 tests/conftest.py 跳过：需要真实 MySQL/PG 且 ACCEPTANCE_ISOLATED_DATABASES=1；本轮未启动 Docker，未执行真实双库",
   "skipped_not_counted_as_passed": true,
   "lint": {
-    "command": "ruff check app scripts tests && ruff format --check app scripts tests",
-    "scope": "app scripts tests（docs/工程收尾版本启动.md 声明的范围）",
+    "command": "ruff check app scripts tests benchmark && ruff format --check app scripts tests benchmark",
+    "scope": "app scripts tests benchmark（2026-10-07 起 benchmark 纳入声明范围，见 docs/工程收尾版本启动.md）",
     "ruff_version": "0.16.9",
-    "result": "通过；138 个文件已格式化",
+    "result": "通过；全部已格式化",
+    "benchmark_lint_fix": "2026-10-07 修复 benchmark/ 下 7 项（5 个多余的 coding 声明、1 个未使用变量、1 个未使用导入）并统一格式化；格式化后重新核对 make_report.py 生成的 markdown 与提交版本逐字节一致",
     "outside_scope_known_issues": [
-      "artifacts/deployment_v1_81/configure_local.py：E701 两条",
-      "benchmark/：UP009、F841 等；该目录为 CRUD-RAG 评测工具，不在声明范围内，未修复"
+      "artifacts/deployment_v1_81/configure_local.py：E701 两条；该目录为部署产物，仍不在声明范围内"
     ]
   },
   "repro_evidence": {

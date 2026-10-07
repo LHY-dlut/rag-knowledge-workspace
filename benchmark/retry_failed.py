@@ -1,10 +1,10 @@
-# -*- coding: utf-8 -*-
 """重试知识库中入库失败的文档（如模型日上限、瞬时故障导致）。
 
 用法：
   python retry_failed.py --api-base http://127.0.0.1:18790 \
       --username bench_admin --password <pw> --kb-id <kb_id>
 """
+
 import argparse
 import sys
 import time
@@ -24,7 +24,9 @@ def main() -> None:
     args = parser.parse_args()
 
     api = Api(args.api_base)
-    token = api.req("POST", "/api/auth/login", {"username": args.username, "password": args.password})["data"]["access_token"]
+    token = api.req(
+        "POST", "/api/auth/login", {"username": args.username, "password": args.password}
+    )["data"]["access_token"]
     api = Api(args.api_base, token)
 
     docs = kb_documents(api, args.kb_id)

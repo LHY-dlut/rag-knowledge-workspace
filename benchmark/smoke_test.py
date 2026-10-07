@@ -1,10 +1,11 @@
-# -*- coding: utf-8 -*-
 """端到端冒烟测试：上传少量语料 → 等待 ready → PG 子块核查 → 证据区间绑定。
 
 使用 run_crud_benchmark 的同一套函数，验证正式评测链路可跑通。
 成本：仅少量 embedding 调用。
 """
+
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -14,7 +15,6 @@ from run_crud_benchmark import (  # noqa: E402
     ALLOWLIST,
     Api,
     bind_case_spans,
-    kb_documents,
     log,
     run_sql_in_container,
     wait_ready,
@@ -22,14 +22,19 @@ from run_crud_benchmark import (  # noqa: E402
 
 API_BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:18790"
 USERNAME = "bench_admin"
-PASSWORD = "BenchAdmin2026!x"
+# 密码只从环境变量读取，不写入源码：评测账号凭据不得进入仓库。
+PASSWORD = os.environ.get("BENCH_PASSWORD", "")
 PG_CONTAINER = "zhixu-rag-bench-postgres-1"
 SAMPLE = 6
 
 
 def main() -> None:
+    if not PASSWORD:
+        raise SystemExit("请通过环境变量 BENCH_PASSWORD 提供 bench_admin 的密码")
     api = Api(API_BASE)
-    token = api.req("POST", "/api/auth/login", {"username": USERNAME, "password": PASSWORD})["data"]["access_token"]
+    token = api.req("POST", "/api/auth/login", {"username": USERNAME, "password": PASSWORD})[
+        "data"
+    ]["access_token"]
     api = Api(API_BASE, token)
     log("登录成功")
 
@@ -44,7 +49,9 @@ def main() -> None:
     allow = json.loads(ALLOWLIST.read_text(encoding="utf-8"))["documents"]
     # 优先选被官方证据引用的文档，保证后续绑定测试有效
     crud_all = json.loads(
-        (Path(__file__).resolve().parents[1] / "prepared_v2" / "crud" / "cases.json").read_text(encoding="utf-8")
+        (Path(__file__).resolve().parents[1] / "prepared_v2" / "crud" / "cases.json").read_text(
+            encoding="utf-8"
+        )
     )
     cited = {ev["document_id"] for c in crud_all for ev in c["official_evidence"]}
     cited_files = [a for a in allow if a["external_document_id"] in cited]
@@ -88,10 +95,19 @@ def main() -> None:
     for did in hits[:3]:
         ext = ext_of[did]
         for ev in by_doc[ext][:1]:
-            text = (Path(__file__).resolve().parents[1] / "prepared_v2" / "corpus" / f"{ext}.txt").read_text(encoding="utf-8")
-            span = {"document_id": did, "start": ev["start"], "end": ev["end"], "quote": text[ev["start"]:ev["end"]]}
+            text = (
+                Path(__file__).resolve().parents[1] / "prepared_v2" / "corpus" / f"{ext}.txt"
+            ).read_text(encoding="utf-8")
+            span = {
+                "document_id": did,
+                "start": ev["start"],
+                "end": ev["end"],
+                "quote": text[ev["start"] : ev["end"]],
+            }
             ids, problems = bind_case_spans(api, PG_CONTAINER, owner_id, pg_kb_id, span, {})
-            log(f"  {did[:16]}… 区间[{ev['start']},{ev['end']}) → {len(ids)} 个子块 {problems or ''}")
+            log(
+                f"  {did[:16]}… 区间[{ev['start']},{ev['end']}) → {len(ids)} 个子块 {problems or ''}"
+            )
             if ids:
                 ok += 1
     log(f"绑定测试: {ok}/{min(3, len(hits))} 成功")

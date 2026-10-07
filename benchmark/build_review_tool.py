@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Build the standalone human-review tool for CRUD/RGB official labels.
 
 Reads the frozen prepared_v2 files (queue, cases, contexts, corpus, manifest)
@@ -10,6 +9,7 @@ export writes the protocol-required human_review_confirmed_v1.json.
 
 Frozen inputs are never modified by this script.
 """
+
 import hashlib
 import json
 from pathlib import Path
@@ -30,7 +30,6 @@ def main() -> None:
     crud = load("crud/cases.json")
     rgb = load("rgb/cases.json")
     rgb_ctx = load("rgb/contexts.json")
-    ctx_by_id = {c["case_id"]: c for c in rgb_ctx}
 
     def corpus_text(doc_id: str) -> str:
         p = PREPARED / "corpus" / f"{doc_id}.txt"
@@ -95,8 +94,12 @@ def main() -> None:
         "prepared_manifest_sha256": manifest_sha,
         "cases": cases,
     }
-    OUT.write_text(TEMPLATE.replace("__PAYLOAD__", json.dumps(payload, ensure_ascii=False)), encoding="utf-8")
-    print(f"wrote {OUT} with {len(cases)} cases (crud={sum(1 for c in cases if c['track']=='crud')}, rgb={sum(1 for c in cases if c['track']=='rgb')})")
+    OUT.write_text(
+        TEMPLATE.replace("__PAYLOAD__", json.dumps(payload, ensure_ascii=False)), encoding="utf-8"
+    )
+    print(
+        f"wrote {OUT} with {len(cases)} cases (crud={sum(1 for c in cases if c['track'] == 'crud')}, rgb={sum(1 for c in cases if c['track'] == 'rgb')})"
+    )
 
 
 TEMPLATE = r"""<!DOCTYPE html>

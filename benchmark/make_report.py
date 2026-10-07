@@ -1,9 +1,9 @@
-# -*- coding: utf-8 -*-
 """把三档评测报告 JSON 转成 Markdown 汇总（供仓库记录与简历引用）。
 
 用法：
   python make_report.py bench_runner/out/crud_bench_report_YYYYmmdd-HHMMSS.json
 """
+
 import json
 import sys
 from pathlib import Path
@@ -50,9 +50,15 @@ def main() -> None:
         row = [fmt(data["strategies"][s]["aggregate"].get(key)) for s in strategies]
         lines.append(f"| {label} | " + " | ".join(row) + " |")
 
-    lines += ["", "## 索引冻结快照", "", f"- 知识库 ID：`{data['freeze']['kb_id']}`",
-              f"- 冻结时间：{data['freeze']['frozen_at']}　知识库版本：{data['freeze']['kb_revision']}",
-              f"- 文档数：{len(data['freeze']['documents'])}", ""]
+    lines += [
+        "",
+        "## 索引冻结快照",
+        "",
+        f"- 知识库 ID：`{data['freeze']['kb_id']}`",
+        f"- 冻结时间：{data['freeze']['frozen_at']}　知识库版本：{data['freeze']['kb_revision']}",
+        f"- 文档数：{len(data['freeze']['documents'])}",
+        "",
+    ]
 
     dropped = sum(len(f["dropped"]) for f in data["fact_report"])
     lines += [
@@ -68,7 +74,12 @@ def main() -> None:
         lines += [f"- {p}" for p in data["bind_problems"][:20]]
         lines += [""]
 
-    lines += ["## 逐题结果", "", "| 题号 | 策略 | 状态 | CR | CP | Faith | AR | 拒答 | 耗时ms |", "|---|---|---|---|---|---|---|---|---|"]
+    lines += [
+        "## 逐题结果",
+        "",
+        "| 题号 | 策略 | 状态 | CR | CP | Faith | AR | 拒答 | 耗时ms |",
+        "|---|---|---|---|---|---|---|---|---|",
+    ]
     for s in strategies:
         for i, r in enumerate(data["strategies"][s]["results"], 1):
             m = r.get("metrics", {})
