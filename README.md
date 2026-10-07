@@ -89,8 +89,11 @@ grade 判证据不足与 check 核验未通过（其中 15/18 是核验模型返
 
 **边界**：拒答率仍高达 67%–75%。按轨迹重新归因（[docs/refusal_attribution_v83.md](docs/refusal_attribution_v83.md)）：
 check 协议失败已从基线的 15/18 降到 check 拒答的 12%–33%；当前最大的可疑误判是
-**"语义核验全部 supported 仍被拒答"**，占全部拒答的 19%–31%，正是默认关闭的
-`scope_no_upgrade_relaxation` 针对的路径，其收益尚未实测。约一半拒答来自 grade，
+**"语义核验全部 supported 仍被拒答"**，占全部拒答的 19%–31%，正是
+`scope_no_upgrade_relaxation` 针对的路径。该开关已实测：dense 配对比较下
+**拒答率 0.7174 → 0.5652，恢复 7 题、变差 0 题**，且 Faithfulness 保持 1.0、
+Context Precision 持平——不是靠放水换来的。开关**默认仍为 false**（单次运行、
+样本来自 AI 辅助标注子集，是否改默认属产品决定）。约一半拒答来自 grade，
 但抽样显示**多数是正确判断**（如问题问 2021 年数据、语料只有 2023 年）。
 
 **拒答率不等于错误率**：参考答案与证据区间为 AI 辅助生成、未经独立人工复核，
