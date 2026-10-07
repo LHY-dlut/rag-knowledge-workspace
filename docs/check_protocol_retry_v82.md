@@ -88,8 +88,13 @@ ID 与原文，而不是只给一句"遗漏答案内容"。`atomic_scope.project
 [benchmark/results_crud_v82_comparison.md](../benchmark/results_crud_v82_comparison.md)。
 
 **这是有界收益，不是拒答问题的解法**：拒答率仍在 67%–75%。本轮只覆盖 check 协议失败，
-约占拒答三分之一；占约一半的 grade 判证据不足（子块级检索未把含答案片段送进上下文）
-未改动，仍是主因。单次运行、每档仅 1–4 道翻转，未做显著性检验。
+且按轨迹复核（[refusal_attribution_v83.md](refusal_attribution_v83.md)）该环节已从基线的
+15/18 降到 check 拒答的 12%–33%；当前最大的可疑误判是"语义核验全部 supported 仍被拒答"
+（占全部拒答 19%–31%），属默认关闭的 `scope_no_upgrade_relaxation` 范围，尚未实测。
+单次运行、每档仅 1–4 道翻转，未做显著性检验。
+
+早期版本称 grade 一侧是"子块级检索未把含答案片段送进上下文"，该说法已被证伪：
+证据子块在 95%–100% 的拒答题中都已在上下文内。
 
 复测口径：`--strategies dense` 与 `--strategies hybrid,full` 两次调用，`--include-flagged`、
 `--kb-id c1036b98-0312-401d-8f7e-f6d4c627a04c`（复用已入库的 314 份文档，未重新嵌入）、
