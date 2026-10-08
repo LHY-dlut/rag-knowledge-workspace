@@ -161,8 +161,19 @@ dense / hybrid / full 各跑一次对照，按题配对：
     planned/fact   →  permission/fact         ×2
     asserted/fact  →  planned/fact            ×1
 
-没有一例是把弱证据说成强断言，边界行为符合设计。但**样本极小**
-（5 个谓词、5 个题次），不足以刻画完整的允许边界。
+没有一例是把弱证据说成强断言。但**样本极小**（5 个谓词、5 个题次），
+不足以刻画允许边界。穷举九个类别后可以看到，规则的实际边界比"只允许更保守"**宽**：
+
+| 答案 ↓ / 原文 → | asserted | future | planned | possible | permission | discussion | suggestion | document_limitation | undetermined |
+|---|---|---|---|---|---|---|---|---|---|
+| asserted | 允许 | 拒绝 | 拒绝 | 拒绝 | 拒绝 | 拒绝 | 拒绝 | 拒绝 | 拒绝 |
+| 其余七类 | 允许 | 允许 | 允许 | 允许 | 允许 | 允许 | 允许 | 允许 | 拒绝 |
+
+实现只拒绝「答案含 asserted/fact 而原文没有」以及任一侧 undetermined，**其余一律放行**。
+因此 `答案=document_limitation / 原文=asserted`（"资料未规定 X"而原文断言了 X）这类
+并非"更保守"、实为相反的转换也被允许。这些格子目前只有语义核验（verdict 必须 supported）
+兜底，**没有针对性反例验证**。已固化为测试
+（`test_relaxed_rule_permits_any_non_asserted_category_not_only_more_cautious`）。
 
 **"零回归"仅指拒答翻转，不等于零质量回归。** full 档 Faithfulness 由 1.0000 降至 0.9583
 （下面逐题说明为分母效应），且模态转换的边界只有在 `_no_upgrade_preserved` 的单测覆盖，

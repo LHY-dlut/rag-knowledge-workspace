@@ -23,7 +23,7 @@
     "tests": "728 通过、21 项集成因未启动真实双库而跳过"
   },
   "core_protection_unchanged": true,
-  "core_protection_note": "原文为非断定/事实时，答案出现断定或事实仍一律拒绝；任一侧为 undetermined 时仍按原严格规则拒绝。放宽仅限「答案比原文更保守」。",
+  "core_protection_note": "原文为非断定/事实时，答案出现断定或事实仍一律拒绝；任一侧为 undetermined 时仍按原严格规则拒绝。穷举九类后确认：实际边界比「只允许更保守」宽——只要答案不含 asserted/fact，任何类别对任何原文类别都放行，含「答案=document_limitation / 原文=asserted」这类实为相反的转换。这些格子目前只有语义核验兜底，无针对性反例验证。",
   "known_limitations": [
     "每档单次运行，样本来自 AI 辅助标注子集，未经独立人工复核",
     "未覆盖的时间归属缺陷（问题年份被回写进答案）与本次改动无关，仍待处理",

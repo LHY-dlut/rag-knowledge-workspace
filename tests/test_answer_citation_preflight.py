@@ -217,3 +217,27 @@ def test_year_binding_requires_the_year_in_the_cited_source(answer, sources, exp
     if not expected:
         assert result["failure_types"] == ["check_year_not_in_cited_source"]
         assert result["unsupported_years"][0]["year"] == "2021"
+
+
+@pytest.mark.parametrize(
+    "answer,content",
+    [
+        # 同一来源同时含 2021 年美国 CPI 与 2023 年 7 月中国 PMI，答案张冠李戴仍通过
+        (
+            "2021年7月份，中国制造业采购经理指数（PMI）为49.3%[S1]。",
+            "2021年美国CPI同比上涨4.7%。2023年7月，中国制造业采购经理指数为49.3%，比上月上升0.3个百分点。",
+        ),
+        # 年份与断言分属两件互不相干的事，仍通过
+        ("2020年产品保修期为24个月[S1]。", "公司2020年成立。产品保修期为24个月。"),
+    ],
+)
+def test_year_binding_known_gap_year_in_source_but_bound_to_another_claim(answer, content):
+    """已知缺口：年份出现在所引来源里就通过，不校验它是否属于同一事件/指标/统计期间。
+
+    该规则只做"年份必须出现在被引来源"的必要条件，**不足以解决时间归属**。
+    修法需要把年份与谓词（事件、指标、统计期间）绑定，属建模改动，尚未实现。
+    本用例固化当前行为：若哪天规则收紧了，这里会失败并提醒更新记录。
+    """
+    from app.check_protocol import answer_year_binding
+
+    assert answer_year_binding(answer, [{"source_id": "S1", "content": content}])["passed"] is True

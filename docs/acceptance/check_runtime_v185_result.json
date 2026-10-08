@@ -1,0 +1,39 @@
+{
+  "time": "2026-10-08",
+  "version": "v1.85",
+  "status": "候选快照，非生产验收版本",
+  "counts": {
+    "local": {
+      "tests": 738,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 21,
+      "status": "passed"
+    },
+    "dual": {
+      "tests": 0,
+      "status": "not_run",
+      "note": "v1.85 未复验真实双库。仓库中 21 项双库通过记录属于 v1.84（见 check_runtime_v184_result.json），不可合并到 v1.85。"
+    }
+  },
+  "counting_rule": "**v1.85 只有本地 738 项通过、21 项集成因缺真实双库环境而跳过。**不得写成\"738 本地 + 21 真实双库\"——双库那次运行针对的是 v1.84 代码，改动年份预检之后尚未重跑。",
+  "paid_calls": 0,
+  "lint": {
+    "command": "ruff check app tests scripts benchmark && ruff format --check app tests scripts benchmark",
+    "ruff_version": "0.16.9",
+    "result": "通过；148 个文件已格式化"
+  },
+  "not_executed": [
+    "真实双库复验（属 v1.84 记录）",
+    "真实模型端到端（年份预检未做链路复验）",
+    "hybrid / full 档页面验收",
+    "24 小时长稳（v1.83 那次未通过；v1.85 未跑）",
+    "独立人工金标",
+    "真实模型并发容量"
+  ],
+  "known_gaps": [
+    "年份预检只拦\"年份不在所引来源\"，未绑定到同一事件/指标/统计期间，反例见 docs/year_binding_v85.md",
+    "范围核验放宽的实际边界比\"只允许更保守\"宽；document_limitation 对 asserted 等转换无针对性反例验证",
+    "时间归属缺陷未解决"
+  ]
+}

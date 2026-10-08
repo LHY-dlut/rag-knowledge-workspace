@@ -258,3 +258,26 @@ async def test_specific_correction_replaces_generic_only_after_a_failure(monkeyp
         assert "结构校验" in corrections[1]
     finally:
         await provider.close()
+
+
+def test_relaxed_rule_permits_any_non_asserted_category_not_only_more_cautious():
+    """固化放宽规则的实际边界——它比"只允许更保守"宽。
+
+    实现只拒绝「答案含 asserted/fact 而原文没有」以及任一侧 undetermined；
+    其余组合一律放行。因此 document_limitation 对 asserted（"资料未规定X"而原文
+    断言了X）这类并非"更保守"而是相反的转换也被允许。
+
+    这些格子目前只有语义核验（verdict 必须 supported）兜底，没有针对性反例验证。
+    若将来收紧规则，本用例会失败并提醒同步更新记录。
+    """
+    # 更保守：允许（设计意图之内）
+    assert _no_upgrade_preserved(["suggestion"], ["asserted"]) is True
+    assert _no_upgrade_preserved(["planned"], ["asserted"]) is True
+    # 并非更保守，而是相反或不同类别：当前同样放行
+    assert _no_upgrade_preserved(["document_limitation"], ["asserted"]) is True
+    assert _no_upgrade_preserved(["permission"], ["planned"]) is True
+    assert _no_upgrade_preserved(["discussion"], ["asserted"]) is True
+    # 唯一被拒的方向：弱证据说成强断言，以及待定
+    assert _no_upgrade_preserved(["asserted"], ["suggestion"]) is False
+    assert _no_upgrade_preserved(["fact"], ["planned"]) is False
+    assert _no_upgrade_preserved(["suggestion"], ["undetermined"]) is False
