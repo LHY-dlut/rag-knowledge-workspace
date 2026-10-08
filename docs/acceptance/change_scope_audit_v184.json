@@ -1,0 +1,30 @@
+{
+  "time": "2026-10-08",
+  "version": "v1.84",
+  "change": "scope_no_upgrade_relaxation 默认值 false → true",
+  "confirmed_by_user": true,
+  "changed_files": [
+    "app/settings.py（默认值 True，附依据注释）",
+    "tests/test_protocol_retry_and_no_upgrade.py（默认值断言翻转 + 新增端到端默认路径测试）"
+  ],
+  "unchanged_code": [
+    "app/schemas.py::_no_upgrade_preserved 判定逻辑本身未改动",
+    "app/check_scope.py / app/atomic_scope.py 的取值回退保持保守（False）",
+    "检索、grade 判定、生成、评分标准、引用协议均未改动"
+  ],
+  "fallback_convention": "没有 settings 的 Provider（测试替身）走保守回退：范围核验严格相等、part_coverage_retry_limit=0。生产 Provider 一定带 settings，故回退不影响线上行为。此前一度把回退也改成 True，导致替身意外走上重试路径（structured 收到未实现的 correction 形参）而被测试捕获，已回退。",
+  "evidence": {
+    "benchmark_dense": "拒答 0.7174 → 0.5652（46 共同题，恢复 7 变差 0）",
+    "benchmark_hybrid": "拒答 0.6889 → 0.6444（45 共同题，恢复 2 变差 0）",
+    "benchmark_full": "拒答 0.7333 → 0.6000（45 共同题，恢复 6 变差 0）",
+    "quality": "Context Precision 持平或上升，Document Recall 不变；full 的 Faithfulness 1.0000→0.9583 经逐题核对为分母效应（2 道原被随机协议失败挡住的题进入均值）",
+    "page_acceptance": "演示文档自带的示例问题在旧默认下连续 3 次生成后拒答，新默认下正常作答并带引用",
+    "tests": "728 通过、21 项集成因未启动真实双库而跳过"
+  },
+  "core_protection_unchanged": true,
+  "core_protection_note": "原文为非断定/事实时，答案出现断定或事实仍一律拒绝；任一侧为 undetermined 时仍按原严格规则拒绝。放宽仅限「答案比原文更保守」。",
+  "known_limitations": [
+    "每档单次运行，样本来自 AI 辅助标注子集，未经独立人工复核",
+    "未覆盖的时间归属缺陷（问题年份被回写进答案）与本次改动无关，仍待处理"
+  ]
+}

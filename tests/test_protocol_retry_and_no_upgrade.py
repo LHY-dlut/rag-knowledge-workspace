@@ -161,12 +161,47 @@ async def test_non_strict_task_does_not_retry():
         await provider.close()
 
 
-def test_scope_no_upgrade_relaxation_defaults_off():
-    assert Settings(_env_file=None).scope_no_upgrade_relaxation is False
+def test_scope_no_upgrade_relaxation_defaults_on():
+    """默认开启：三档实测拒答率全面下降且零回归；关闭后回到严格相等规则。"""
+    assert Settings(_env_file=None).scope_no_upgrade_relaxation is True
     assert (
-        Settings(_env_file=None, scope_no_upgrade_relaxation=True).scope_no_upgrade_relaxation
-        is True
+        Settings(_env_file=None, scope_no_upgrade_relaxation=False).scope_no_upgrade_relaxation
+        is False
     )
+
+
+async def test_default_relaxation_is_applied_on_the_atomic_check_path():
+    """端到端确认默认值真的作用在核验链上，而不只是函数级行为。
+
+    替身 Provider 没有 settings 时走保守回退，所以这里显式挂上 Settings；
+    part_coverage_retry_limit 置 0 以免触发该替身未实现的 correction 形参。
+    """
+    from tests.test_predicate_roles import RoleProvider, review
+
+    answer, content = "资料范围内，实际断言。[S1]", "实际断言。"
+
+    # 答案=permission、原文=asserted：答案更保守，默认（放宽）应通过
+    relaxed = RoleProvider(mode="permission", source_mode="asserted")
+    relaxed.settings = Settings(_env_file=None, part_coverage_retry_limit=0)
+    result, _ = await review(relaxed, answer, content)
+    assert result["modality_preserved"] is True
+
+    # 显式关回严格相等规则，同一输入应被拒
+    strict = RoleProvider(mode="permission", source_mode="asserted")
+    strict.settings = Settings(
+        _env_file=None, part_coverage_retry_limit=0, scope_no_upgrade_relaxation=False
+    )
+    result, _ = await review(strict, answer, content)
+    assert result["modality_preserved"] is False
+
+    # 核心防护不变：原文只是建议，答案说成断定，两种配置都必须拒
+    for flag in (True, False):
+        provider = RoleProvider(mode="asserted", source_mode="suggestion")
+        provider.settings = Settings(
+            _env_file=None, part_coverage_retry_limit=0, scope_no_upgrade_relaxation=flag
+        )
+        result, _ = await review(provider, answer, content)
+        assert result["modality_preserved"] is False
 
 
 async def test_literal_error_retry_names_the_allowed_values():

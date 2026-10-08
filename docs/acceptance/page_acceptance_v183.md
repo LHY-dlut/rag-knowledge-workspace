@@ -22,18 +22,19 @@
 
 截图与结果 JSON 保留在本地 `production_acceptance_20261003/ui_v183_on/`，不随源码发布。
 
-## 关键前提：本次是在开关打开的情况下通过的
+## 关键前提：本次是在开关打开的情况下通过的；该值随后成为默认
 
-同一脚本在**默认配置（`scope_no_upgrade_relaxation=false`）下无法通过**，稳定卡在
-"载入示例 → 提问"：示例文档写着"员工出差后必须在7天内提交报销申请"，
-界面自带的示例问题就是问这个，但系统连续 3 次生成后拒答。
+本次执行时 `scope_no_upgrade_relaxation=true` 是**显式打开**的（当时默认仍是 false）。
+同一脚本在当时的默认配置下无法通过，稳定卡在"载入示例 → 提问"：
+示例文档写着"员工出差后必须在7天内提交报销申请"，界面自带的示例问题就是问这个，
+但系统连续 3 次生成后拒答。
 
 轨迹显示 grade `passed: true`、check 语义判据 `supported`，
 卡在范围核验`答案=permission，原文=asserted`。打开开关后同一问题正常作答并带引用
 （`出差报销申请需在出差后7天内提交[S1]`）。
 
-因此本记录应读作：**在 `scope_no_upgrade_relaxation=true` 下页面验收通过**，
-而不是默认配置下的通过证明。详见 [refusal_attribution_v83.md](../refusal_attribution_v83.md)。
+**2026-10-08 该规则经用户确认改为默认开启（V84）**，因此本记录同时也是默认配置下的
+验收依据。详见 [refusal_attribution_v83.md](../refusal_attribution_v83.md)。
 
 ## 脚本改动
 

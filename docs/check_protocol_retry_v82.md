@@ -38,7 +38,7 @@ ID 与原文，而不是只给一句"遗漏答案内容"。`atomic_scope.project
 
 ## 改动四：范围核验"不得升级"开关（默认关）
 
-`scope_no_upgrade_relaxation`（默认 false，保持原有严格规则）：
+`scope_no_upgrade_relaxation`（V82 引入时默认 false；**V84 起改为默认 true**，见本文末）：
 原判定要求答案与原文的语气/归属类别集合完全相等，会把"答案比原文更保守"也判为不通过。
 启用时改为只禁止升级——原文非断定/事实时，答案出现断定/事实才算不一致；
 任一侧为 `undetermined` 时仍按原严格规则拒绝。本次公开基准未启用该开关。
@@ -91,7 +91,7 @@ ID 与原文，而不是只给一句"遗漏答案内容"。`atomic_scope.project
 **这是有界收益，不是拒答问题的解法**：拒答率仍在 67%–75%。本轮只覆盖 check 协议失败，
 且按轨迹复核（[refusal_attribution_v83.md](refusal_attribution_v83.md)）该环节已从基线的
 15/18 降到 check 拒答的 12%–33%；当前最大的可疑误判是"语义核验全部 supported 仍被拒答"
-（占全部拒答 19%–31%），属默认关闭的 `scope_no_upgrade_relaxation` 范围，尚未实测。
+（占全部拒答 19%–31%），属 `scope_no_upgrade_relaxation` 范围；该规则已实测并于 V84 改为默认开启。
 单次运行、每档仅 1–4 道翻转，未做显著性检验。
 
 早期版本称 grade 一侧是"子块级检索未把含答案片段送进上下文"，该说法已被证伪：

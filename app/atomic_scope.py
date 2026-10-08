@@ -332,6 +332,8 @@ async def review_atomic_scope(
                 raise CheckProtocolError("逐谓词范围核验原文位置不存在")
             bindings.append(bound)
             verified_sources.add(ref.source_id)
+        # 没有 settings 的 Provider 走保守回退（严格相等），与同一函数里
+        # part_coverage_retry_limit 的回退 0 同一约定：未声明配置即按最严处理。
         no_upgrade = getattr(
             getattr(provider, "settings", None), "scope_no_upgrade_relaxation", False
         )

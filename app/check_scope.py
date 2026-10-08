@@ -148,6 +148,8 @@ async def validate_check_scope(provider, judgment, answer: str, sources: list[di
                 raise CheckProtocolError("独立答案投影核对缺少来源投影")
             modes, voices = independent.matches_source(
                 claim.projection,
+                # 没有 settings 的 Provider 走保守回退（严格相等），与 part_coverage_retry_limit
+                # 的回退 0 同一约定：未声明配置即按最严处理。生产 Provider 一定带 settings。
                 no_upgrade=getattr(
                     getattr(provider, "settings", None), "scope_no_upgrade_relaxation", False
                 ),

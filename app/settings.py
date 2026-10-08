@@ -32,8 +32,10 @@ class Settings(BaseSettings):
     # 逐谓词片段投影漏选实质片段时，按缺失清单定向重问的次数；0 表示不重问
     part_coverage_retry_limit: int = Field(1, ge=0, le=2)
     # 范围核验：允许答案语气/归属比原文更保守（禁止升级为断定/事实）。
-    # False 保持原有的"类别集合必须完全相等"严格规则。
-    scope_no_upgrade_relaxation: bool = False
+    # 默认开启：三档配对实测拒答率 dense -15.2 / hybrid -4.4 / full -13.3 个百分点、
+    # 恢复 15 题零回归；关闭时演示文档自带的示例问题会被判"答不了"。
+    # 置 False 回到"类别集合必须完全相等"的严格规则。
+    scope_no_upgrade_relaxation: bool = True
     upload_dir: Path = Path("data/uploads")
     upload_max_bytes: int = Field(20 * 1024 * 1024, ge=1)
     parsed_max_chars: int = Field(2_000_000, ge=1000)
