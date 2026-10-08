@@ -14,9 +14,10 @@
   ],
   "fallback_convention": "没有 settings 的 Provider（测试替身）走保守回退：范围核验严格相等、part_coverage_retry_limit=0。生产 Provider 一定带 settings，故回退不影响线上行为。此前一度把回退也改成 True，导致替身意外走上重试路径（structured 收到未实现的 correction 形参）而被测试捕获，已回退。",
   "evidence": {
-    "benchmark_dense": "拒答 0.7174 → 0.5652（46 共同题，恢复 7 变差 0）",
-    "benchmark_hybrid": "拒答 0.6889 → 0.6444（45 共同题，恢复 2 变差 0）",
-    "benchmark_full": "拒答 0.7333 → 0.6000（45 共同题，恢复 6 变差 0）",
+    "benchmark_dense": "拒答 0.7174 → 0.5652（46 共同题，7 题转作答、0 题反向）",
+    "benchmark_hybrid": "拒答 0.6889 → 0.6444（45 共同题，2 题转作答、0 题反向）",
+    "benchmark_full": "拒答 0.7333 → 0.6000（45 共同题，6 题转作答、0 题反向）",
+    "causal_audit": "15 道翻转中只有 5 道确由模态/归属放宽放行（存在类别差异且被允许）；另 10 道答案与原文类别完全相同，严格规则下同样通过，翻转来自运行间波动。上面是测量差值，不是开关的因果效应。实际放行的转换仅 asserted/fact→suggestion/suggestion、planned/fact→permission/fact、asserted/fact→planned/fact 三种，无一是把弱证据说成强断言；样本仅 5 个谓词，不足以刻画完整边界",
     "quality": "Context Precision 持平或上升，Document Recall 不变；full 的 Faithfulness 1.0000→0.9583 经逐题核对为分母效应（2 道原被随机协议失败挡住的题进入均值）",
     "page_acceptance": "演示文档自带的示例问题在旧默认下连续 3 次生成后拒答，新默认下正常作答并带引用",
     "tests": "728 通过、21 项集成因未启动真实双库而跳过"
