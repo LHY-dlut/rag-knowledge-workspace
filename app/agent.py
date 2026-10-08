@@ -6,7 +6,7 @@ from langchain_core.tools import StructuredTool
 from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 
-from app.check_protocol import answer_citation_coverage, check_retry_feedback
+from app.check_protocol import answer_citation_coverage, answer_year_binding, check_retry_feedback
 from app.check_scope import validate_check_scope
 from app.evidence_protocol import bind_decision, evidence_spans, prepare_citations
 from app.models import AgentStep, KnowledgeBase, PromptTemplate, ToolDefinition
@@ -449,6 +449,30 @@ class RAGAgent:
                         "若引用后还留有动作或结论，应重新生成完整陈述并把对应真实引用放在该陈述末尾，"
                         "不要只在数字或名词后提前标记引用。"
                         "不得补造引用；引用完整后仍需独立事实核验。"
+                    ),
+                )
+        if judgment.passed:
+            binding = answer_year_binding(rendered, sources)
+            protocol["answer_year_binding"] = binding
+            if not binding["passed"]:
+                protocol["passed"] = False
+                protocol["failure_types"] = binding["failure_types"]
+                years = json.dumps(
+                    [
+                        {"year": v["year"], "cited": v["cited_source_ids"]}
+                        for v in binding["unsupported_years"]
+                    ],
+                    ensure_ascii=False,
+                )
+                judgment = Judgment(
+                    passed=False,
+                    reason=(
+                        "答案断言的年份在被引用的原文中找不到："
+                        + years[:700]
+                        + "。原文未标明年份时不得把问题里的年份回写进答案。"
+                        "请删去无原文依据的年份、改用原文真正写出的时间表述，"
+                        "或为含年份的陈述提供确实包含该年份的引用来源；"
+                        "若证据本身无法回答该年份的问题，应当拒答而不是补一个年份。"
                     ),
                 )
         if judgment.passed:

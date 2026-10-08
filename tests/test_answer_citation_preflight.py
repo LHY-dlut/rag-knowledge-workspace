@@ -148,3 +148,72 @@ async def test_inline_citations_leave_predicate_unpublished_then_regenerate(clie
     coverage = checks[0]["citation_protocol"]["answer_citation_coverage"]
     assert coverage["references_added"] is False and coverage["semantic_support_checked"] is False
     assert any("作为材料" in s["quote"] for s in coverage["uncited_answer_spans"])
+
+
+@pytest.mark.parametrize(
+    "answer,sources,expected",
+    [
+        # 年份在被引用原文中出现：通过
+        (
+            "2023年7月制造业PMI为49.3%[S1]。",
+            [{"source_id": "S1", "content": "2023-07-31 发布：7月份制造业PMI为49.3%。"}],
+            True,
+        ),
+        # 原文未标年份，答案回写问题里的年份：拦截（真实缺陷形态）
+        (
+            "2021年7月份，制造业PMI为49.3%[S1]。",
+            [
+                {
+                    "source_id": "S1",
+                    "content": "7月份，制造业采购经理指数为49.3%，比上月上升0.3个百分点。",
+                }
+            ],
+            False,
+        ),
+        # 年份只出现在另一条未被引用的来源里：仍然拦截（不取全来源并集）
+        (
+            "2021年7月份，制造业PMI为49.3%[S1]。",
+            [
+                {"source_id": "S1", "content": "7月份，制造业采购经理指数为49.3%。"},
+                {"source_id": "S2", "content": "纽约联储：2021年美国民众通胀预期升温。"},
+            ],
+            False,
+        ),
+        # 同一引用组内分别引用到含年份的来源：通过
+        (
+            "2021年数据见甲文[S1]，2023年数据见乙文[S2]。",
+            [
+                {"source_id": "S1", "content": "2021年该项为8%。"},
+                {"source_id": "S2", "content": "2023年该项为10%。"},
+            ],
+            True,
+        ),
+        # 没有年份：不触发
+        (
+            "7月份制造业PMI为49.3%[S1]。",
+            [{"source_id": "S1", "content": "7月份PMI为49.3%。"}],
+            True,
+        ),
+        # 句末标记按既有规则覆盖整段前置文字，段内年份同样受该引用约束
+        (
+            "2021年发布过一份文件。另有陈述[S1]。",
+            [{"source_id": "S1", "content": "另有陈述。"}],
+            False,
+        ),
+        # 标记之后、未再出现引用的年份不由本规则报出（属位置预检职责）
+        (
+            "另有陈述[S1]。2021年发布过一份文件。",
+            [{"source_id": "S1", "content": "另有陈述。"}],
+            True,
+        ),
+    ],
+)
+def test_year_binding_requires_the_year_in_the_cited_source(answer, sources, expected):
+    from app.check_protocol import answer_year_binding
+
+    result = answer_year_binding(answer, sources)
+    assert result["passed"] is expected
+    assert result["semantic_support_checked"] is False
+    if not expected:
+        assert result["failure_types"] == ["check_year_not_in_cited_source"]
+        assert result["unsupported_years"][0]["year"] == "2021"

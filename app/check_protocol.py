@@ -146,6 +146,47 @@ def answer_citation_coverage(answer: str) -> dict:
     }
 
 
+def answer_year_binding(answer: str, sources: list[dict]) -> dict:
+    """答案里出现的年份必须能在它实际引用的来源里找到。
+
+    确定性规则，不调用模型，与 answer_citation_coverage 同属引用位置预检。
+    防的是"把问题里的年份回写进答案"：问题问 2021 年、语料是 2023 年新闻，
+    答案写成"2021年7月，某指标为49.3%[S1]"，而 S1 原文只有"7月份"未标年份。
+
+    只按该处实际引用到的来源比对，不取全部来源的并集——否则无关来源里偶然
+    出现的同一年份会让检查失效。
+    """
+    known = {s["source_id"]: (s.get("content") or "") for s in sources}
+    _, scopes = citation_scopes(answer)
+    violations = []
+    for match in re.finditer(r"(?:19|20)\d{2}", answer):
+        cited = {
+            source_id
+            for scope in scopes
+            if scope["text_start"] <= match.start() < scope["text_end"]
+            for source_id in scope["source_ids"]
+        }
+        if not cited:
+            # 未被任何引用覆盖：由 answer_citation_coverage 负责，这里不重复报
+            continue
+        if any(match.group(0) in known.get(source_id, "") for source_id in cited):
+            continue
+        violations.append(
+            {
+                "year": match.group(0),
+                "position": match.start(),
+                "cited_source_ids": sorted(cited),
+            }
+        )
+    return {
+        "passed": not violations,
+        "failure_types": ["check_year_not_in_cited_source"] if violations else [],
+        "unsupported_years": violations,
+        "rule": "a year stated in the answer must appear in a source cited at that position",
+        "semantic_support_checked": False,
+    }
+
+
 def bind_check(decision: CheckDecision, answer: str, sources: list[dict]) -> BoundCheckJudgment:
     known = {s["source_id"]: s for s in sources}
     marker_positions, scopes = citation_scopes(answer)
