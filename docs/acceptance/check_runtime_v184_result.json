@@ -1,0 +1,41 @@
+{
+  "time": "2026-10-08",
+  "version": "v1.84",
+  "commit": "b6f56ed",
+  "counts": {
+    "local": {
+      "tests": 728,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 21,
+      "status": "passed"
+    },
+    "dual": {
+      "tests": 21,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "status": "passed",
+      "run_after_default_change": true,
+      "command": "pytest -q -rs -m integration（TEST_BUSINESS_DB_URL / TEST_VECTOR_DB_URL / ACCEPTANCE_ISOLATED_DATABASES=1，独立空库）",
+      "fresh_databases": ["rag_v83_biz_de84b964", "rag_v83_vec_de84b964"],
+      "helper_script": "output/run_dual_db_v83.sh（迁移两次 → 集成测试，均在同一空库对上）"
+    }
+  },
+  "total_passed": 749,
+  "counting_rule": "728 与 21 是两次独立进程的运行结果：本地跑法下 21 项集成用例因缺真实双库环境而跳过（记为 skipped，不计入通过）；随后在新建空库对上单独运行，21 项全部通过。合计 749 项通过，但不可说成\"一次运行 749 通过\"。",
+  "python": "3.13.6（宿主机虚拟环境）",
+  "provider": "Demo/Mock",
+  "paid_calls": 0,
+  "lint": {
+    "command": "ruff check app tests scripts benchmark && ruff format --check app tests scripts benchmark",
+    "ruff_version": "0.16.9",
+    "result": "通过；148 个文件已格式化"
+  },
+  "not_executed": [
+    "24 小时长稳（v1.83 那次未通过，见 soak_v183_failed.md；v1.84 未重跑）",
+    "hybrid / full 档的页面验收（页面验收只在 dense 的 rag 模式下做过）",
+    "独立人工金标",
+    "真实模型并发容量"
+  ]
+}

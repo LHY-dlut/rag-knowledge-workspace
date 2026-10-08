@@ -138,8 +138,12 @@ dense / hybrid / full 各跑一次对照，按题配对：
 | hybrid | 45 | 0.6889 | 0.6444 | −4.4 pt | 2 | 0 |
 | full | 45 | 0.7333 | 0.6000 | −13.3 pt | 6 | 0 |
 
-三档方向一致、**零回归**。Context Recall 全部上升（+4.4 ~ +10.9 pt），
-Context Precision 持平或上升，Document Recall 不变。
+三档方向一致、**拒答翻转零回归**（没有一题从作答变为拒答）。Context Recall 全部上升
+（+4.4 ~ +10.9 pt），Context Precision 持平或上升，Document Recall 不变。
+
+**"零回归"仅指拒答翻转，不等于零质量回归。** full 档 Faithfulness 由 1.0000 降至 0.9583
+（下面逐题说明为分母效应），且模态转换的边界只有在 `_no_upgrade_preserved` 的单测覆盖，
+没有在真实题集上单独验证"哪些模态转换应被允许"这一边界本身。
 
 ### full 档 Faithfulness 由 1.0000 降到 0.9583：是分母效应，不是质量退化
 
@@ -174,6 +178,8 @@ Context Precision 持平或上升，Document Recall 不变。
 - **时间归属张冠李戴**（见上）：问题里的年份被回写进答案，grade 与语义核验都未识别
   "原文未标年份不可断言"。与开关无关，属独立缺陷
 - ~~开关默认仍为 false~~ **已于 V84 改为默认开启**（2026-10-08 经用户确认）。
-  依据：三档全部改善、零回归、质量指标无退化（full 的 Faithfulness 下降已查明为分母效应），
-  且默认配置下演示文档自带的示例问题必然拒答。核心防护不变——原文弱而答案说成断定/事实
-  仍一律拒绝，`undetermined` 仍走严格规则
+  依据：三档拒答率全部下降、拒答翻转零回归、Context Precision 与 Document Recall 未退化
+  （full 的 Faithfulness 下降已查明为分母效应），且默认配置下演示文档自带的示例问题必然拒答。
+  核心防护不变——原文弱而答案说成断定/事实仍一律拒绝，`undetermined` 仍走严格规则。
+  **保留意见**：模态转换的允许边界未在真实题集上单独验证，只由 `_no_upgrade_preserved`
+  的单测覆盖；不得声称"零质量回归"
